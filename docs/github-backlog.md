@@ -51,6 +51,18 @@ Issues:
 5. Add CSV export
 6. Add audit timestamp display in report cards
 
+### v0.7 - Automated Review and Release Gate
+
+Goal: close the no-human-in-the-loop delivery loop with automated code quality, security, privacy, deployment, and issue/milestone closure verification. Human review is not required when all automated gates pass; Telegram remains the notification channel for progress, failures, and completion.
+
+Issues:
+
+1. Run final automated code and security review
+2. Verify all implementation milestones and issues are closed or explicitly resolved
+3. Verify local deployment health and generated report assets
+4. Verify no private business context, API keys, tokens, or local data are tracked
+5. Publish final automation completion summary
+
 ### v1.0 - Stable Self-Hosted Release
 
 Goal: stable Docker release suitable for homelab and small-team use.
