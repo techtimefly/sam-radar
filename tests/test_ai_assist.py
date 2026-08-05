@@ -14,6 +14,32 @@ from sam_radar.config import Settings
 from sam_radar.storage import Store
 
 
+def test_export_proposal_artifact_markdown_includes_metadata(tmp_path: Path):
+    from sam_radar.core import export_proposal_artifact_markdown
+
+    data = tmp_path / "data"
+    settings = Settings(sam_gov_api_key="test", data_dir=data)
+    store = Store(data / "sam-radar.sqlite3")
+    artifact = store.add_proposal_artifact(
+        {
+            "noticeId": "export-1",
+            "artifactType": "prime-proposal",
+            "title": "Prime Draft",
+            "status": "review",
+            "content": "## Technical Approach\nDraft text.",
+            "notes": "Ready for capture review.",
+        }
+    )
+
+    exported = export_proposal_artifact_markdown(settings, artifact["id"])
+
+    assert exported["ok"] is True
+    assert exported["filename"] == "Prime-Draft.md"
+    assert "# Prime Draft" in exported["content"]
+    assert "- Notice ID: export-1" in exported["content"]
+    assert "## Technical Approach" in exported["content"]
+
+
 def test_deterministic_summary_uses_description_and_evidence():
     opp = {
         "title": "Security Support",

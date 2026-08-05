@@ -181,6 +181,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="artifact-history"' in html
     assert 'function loadArtifactHistory' in html
     assert '/api/proposal-artifact-history/' in html
+    assert 'Export MD' in html
+    assert 'class="sam artifact-export"' in html
+    assert '/api/proposal-artifact-export/' in html
     assert 'Prime Templates' in html
     assert 'function generatePrimeArtifacts' in html
     assert '/api/ai/prime-templates' in html
