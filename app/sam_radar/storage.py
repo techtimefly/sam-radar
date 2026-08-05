@@ -326,6 +326,30 @@ class Store:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS proposal_artifact_versions (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  artifact_id INTEGER NOT NULL,
+                  notice_id TEXT NOT NULL,
+                  artifact_type TEXT NOT NULL,
+                  title TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL DEFAULT 'draft',
+                  format TEXT NOT NULL DEFAULT 'markdown',
+                  content TEXT NOT NULL DEFAULT '',
+                  notes TEXT NOT NULL DEFAULT '',
+                  version INTEGER NOT NULL,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY(artifact_id) REFERENCES proposal_artifacts(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_proposal_artifact_versions_artifact
+                ON proposal_artifact_versions (artifact_id, version DESC)
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS ai_audit_events (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   notice_id TEXT NOT NULL DEFAULT '',
@@ -1271,6 +1295,43 @@ class Store:
             "updatedAt": row["updated_at"],
         }
 
+
+    def _proposal_artifact_version_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "artifactId": row["artifact_id"],
+            "noticeId": row["notice_id"],
+            "artifactType": row["artifact_type"],
+            "title": row["title"],
+            "status": row["status"],
+            "format": row["format"],
+            "content": row["content"],
+            "notes": row["notes"],
+            "version": row["version"],
+            "createdAt": row["created_at"],
+        }
+
+    def _add_proposal_artifact_version(self, conn: sqlite3.Connection, row: sqlite3.Row, created_at: str) -> None:
+        conn.execute(
+            """
+            INSERT INTO proposal_artifact_versions
+              (artifact_id, notice_id, artifact_type, title, status, format, content, notes, version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"],
+                row["notice_id"],
+                row["artifact_type"],
+                row["title"],
+                row["status"],
+                row["format"],
+                row["content"],
+                row["notes"],
+                row["version"],
+                created_at,
+            ),
+        )
+
     def add_proposal_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         notice_id = clean_text(payload.get("noticeId"), 200)
         if not notice_id:
@@ -1305,8 +1366,9 @@ class Store:
                     now,
                 ),
             )
-            self._add_event(conn, notice_id, "proposal_artifact_created", "", title, "Proposal artifact created", now)
             row = conn.execute("SELECT * FROM proposal_artifacts WHERE id = ?", (cur.lastrowid,)).fetchone()
+            self._add_proposal_artifact_version(conn, row, now)
+            self._add_event(conn, notice_id, "proposal_artifact_created", "", title, "Proposal artifact created", now)
         return self._proposal_artifact_from_row(row)
 
     def update_proposal_artifact(self, artifact_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1342,9 +1404,10 @@ class Store:
                 """,
                 (artifact_type, title, status, fmt, content, notes, version, now, artifact_id),
             )
-            if changed:
-                self._add_event(conn, existing["notice_id"], "proposal_artifact_updated", str(existing["version"]), str(version), "Proposal artifact updated", now)
             row = conn.execute("SELECT * FROM proposal_artifacts WHERE id = ?", (artifact_id,)).fetchone()
+            if changed:
+                self._add_proposal_artifact_version(conn, row, now)
+                self._add_event(conn, existing["notice_id"], "proposal_artifact_updated", str(existing["version"]), str(version), "Proposal artifact updated", now)
         return self._proposal_artifact_from_row(row)
 
     def proposal_artifacts(self, notice_id: str | None = None) -> list[dict[str, Any]]:
@@ -1357,6 +1420,21 @@ class Store:
         with self.connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._proposal_artifact_from_row(row) for row in rows]
+
+
+    def proposal_artifact_history(self, artifact_id: int) -> list[dict[str, Any]]:
+        if not artifact_id:
+            raise ValueError("artifactId is required")
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM proposal_artifact_versions
+                WHERE artifact_id = ?
+                ORDER BY version DESC, id DESC
+                """,
+                (artifact_id,),
+            ).fetchall()
+        return [self._proposal_artifact_version_from_row(row) for row in rows]
 
     def proposal_artifact_map(self, notice_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         if not notice_ids:
