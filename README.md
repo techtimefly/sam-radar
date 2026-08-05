@@ -137,6 +137,7 @@ Slack and Telegram are optional. Configure either or both in `.env`. Daily diges
 
 - `docs/publication.md` covers public GitHub publishing, privacy checks, and issue seeding.
 - `docs/deployment-homelab.md` covers Docker plus `https://sam-radar.example.test` behind nginx.
+- `docs/ux-density.md` documents the pipeline cockpit design direction and responsive QA targets.
 - `deploy/nginx/sam-radar.example.test.conf` is an example nginx vhost.
 
 ## Local Development

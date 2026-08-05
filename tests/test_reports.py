@@ -77,6 +77,17 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'name="decisionReason"' in html
     assert 'class="documents"' in html
     assert 'class="timeline"' in html
+    assert 'max-width:min(1760px,calc(100vw - 48px))' in html
+    assert 'class="tool-group view-group"' in html
+    assert 'class="tool-group filter-group"' in html
+    assert 'class="tool-group action-group"' in html
+    assert 'width:min(1320px,calc(100vw - 40px))' in html
+    assert 'overflow-wrap:anywhere;overflow-x:hidden' in html
+    assert '.detail-fit a{overflow-wrap:anywhere;word-break:break-word}' in html
+    assert '.detail-sections>section,.documents,.doc-row,.doc-row label{min-width:0}' in html
+    assert 'grid-template-columns:minmax(120px,.8fr) minmax(180px,1.5fr) minmax(92px,auto) auto' in html
+    assert '.doc-row input{width:100%;min-width:0}' in html
+    assert 'grid-template-columns:repeat(8,minmax(210px,1fr))' in html
     assert 'id="theme-button"' in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
     assert 'Updated: Aug 4, 2026 6:54 PM MDT' in html
