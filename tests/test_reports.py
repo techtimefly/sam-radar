@@ -87,7 +87,18 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '.detail-sections>section,.documents,.doc-row,.doc-row label{min-width:0}' in html
     assert 'grid-template-columns:minmax(120px,.8fr) minmax(180px,1.5fr) minmax(92px,auto) auto' in html
     assert '.doc-row input{width:100%;min-width:0}' in html
-    assert 'grid-template-columns:repeat(8,minmax(210px,1fr))' in html
+    assert 'grid-template-columns:repeat(var(--lane-count,8),minmax(210px,1fr))' in html
+    assert '<nav class="toolbar commandbar" aria-label="Report controls">' in html
+    assert 'id="lane-button"' in html
+    assert 'id="lane-panel" class="lane-popover"' in html
+    assert 'id="lane-active"' in html
+    assert 'id="lane-hide-empty"' in html
+    assert 'id="back-to-top" class="back-to-top"' in html
+    assert 'samRadarLanePrefs' in html
+    assert "const statusOrder=['new','reviewing','pursue','teaming','submitted','monitor','no-bid','archived']" in html
+    assert 'grid-template-columns:repeat(var(--lane-count,8),minmax(210px,1fr))' in html
+    assert '.back-to-top.visible' in html
+    assert '.toolbar{position:static}' not in html
     assert 'id="theme-button"' in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
     assert 'Updated: Aug 4, 2026 6:54 PM MDT' in html
