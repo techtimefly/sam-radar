@@ -18,6 +18,7 @@ from .core import (
     ai_opportunity_gaps,
     ai_opportunity_requirements,
     ai_opportunity_summary,
+    ai_prime_templates,
     ai_settings,
     create_proposal,
     delete_search_reference_code,
@@ -131,7 +132,7 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path in {"/api/ai/test", "/api/ai/summary", "/api/ai/requirements", "/api/ai/gaps"}:
+        if parsed.path in {"/api/ai/test", "/api/ai/summary", "/api/ai/requirements", "/api/ai/gaps", "/api/ai/prime-templates"}:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI actions are disabled."})
                 return
@@ -147,6 +148,8 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = ai_opportunity_requirements(self.settings, payload)
                 elif parsed.path == "/api/ai/gaps":
                     result = ai_opportunity_gaps(self.settings, payload)
+                elif parsed.path == "/api/ai/prime-templates":
+                    result = ai_prime_templates(self.settings, payload)
                 else:
                     result = ai_opportunity_summary(self.settings, payload)
                 self._send_json(200, result)

@@ -5,6 +5,7 @@ from sam_radar.ai_assist import (
     deterministic_gap_analysis,
     deterministic_requirements,
     deterministic_summary,
+    generate_prime_proposal_templates,
     opportunity_requirements,
     opportunity_summary,
 )
@@ -27,6 +28,61 @@ def test_deterministic_summary_uses_description_and_evidence():
     assert summary["fit"] == "Security fit based on DJ01."
     assert summary["evidence"] == ["Offeror must provide CMMC documentation before award."]
     assert "SAM.gov description" in summary["sources"]
+
+
+def test_deterministic_prime_templates_builds_editable_artifacts():
+    from sam_radar.ai_assist import deterministic_prime_templates
+
+    opp = {
+        "title": "CMMC Support",
+        "organization": "Example Agency",
+        "dueDisplay": "Aug 9, 2026 5:00 PM MDT",
+        "fitReason": "Strong DevSecOps and CMMC fit.",
+        "descriptionParagraphs": [
+            "Contractor shall provide secure engineering support. Submit a technical proposal by email. Evaluation will consider technical approach. Include SF 1449."
+        ],
+    }
+    artifacts = deterministic_prime_templates(opp, [{"section": "Security", "snippet": "Offeror must provide CMMC documentation before award."}])
+
+    assert [item["artifactType"] for item in artifacts] == ["prime-proposal", "compliance-matrix", "forms-checklist", "questions"]
+    assert "# Prime Proposal Draft Template" in artifacts[0]["content"]
+    assert "| Category | Requirement | Source | Response Owner | Status |" in artifacts[1]["content"]
+    assert "SF 1449" in artifacts[2]["content"]
+    assert "Compliance evidence needed" in artifacts[3]["content"]
+
+
+def test_generate_prime_proposal_templates_creates_and_updates_artifacts(tmp_path: Path):
+    reports = tmp_path / "reports"
+    data = tmp_path / "data"
+    reports.mkdir()
+    report = {
+        "matches": [
+            {
+                "noticeId": "abc",
+                "title": "Security Support",
+                "organization": "Example Agency",
+                "score": 9,
+                "dueDisplay": "Aug 9, 2026 5:00 PM MDT",
+                "fitReason": "Strong DevSecOps fit.",
+                "descriptionParagraphs": ["Contractor shall provide DevSecOps support. Submit quote by email. Include attachments."],
+            }
+        ]
+    }
+    (reports / "latest.json").write_text(json.dumps(report))
+    settings = Settings(sam_gov_api_key="test", reports_dir=reports, data_dir=data)
+    store = Store(data / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "abc", "sourceType": "url", "source": "https://example.test/doc.txt", "label": "Doc"})
+    store.replace_evidence_snippets("abc", doc["id"], [{"section": "Evaluation", "snippet": "Evaluation will use best value and technical approach."}])
+
+    first = generate_prime_proposal_templates(settings, {"noticeId": "abc"})
+    second = generate_prime_proposal_templates(settings, {"noticeId": "abc"})
+
+    assert first["ok"] is True
+    assert first["proposal"]["role"] == "prime"
+    assert len(first["generated"]) == 4
+    assert len(second["artifacts"]) == 4
+    assert all(item["version"] == 1 for item in second["generated"])
+    assert {event["type"] for event in store.get_status("abc")["events"]} >= {"proposal_created", "proposal_artifact_created"}
 
 
 def test_opportunity_summary_falls_back_without_ai(tmp_path: Path):

@@ -245,6 +245,108 @@ def opportunity_gaps(settings: Settings, payload: dict[str, Any]) -> dict[str, A
     return {"ok": True, "mode": mode, "provider": provider, "warning": warning, "analysis": analysis, "aiNotes": ai_notes, "ai": ai}
 
 
+def _bullet_lines(items: list[dict[str, Any]], fallback: str) -> str:
+    lines = [f"- {item.get('text') or item.get('detail') or item.get('title')}" for item in items if item.get('text') or item.get('detail') or item.get('title')]
+    return "\n".join(lines[:8]) if lines else f"- {fallback}"
+
+
+def _requirement_rows(requirements: dict[str, list[dict[str, Any]]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for bucket, label in (
+        ("requirements", "Requirement"),
+        ("submissionInstructions", "Submission"),
+        ("evaluationCriteria", "Evaluation"),
+        ("requiredForms", "Form"),
+    ):
+        for item in requirements.get(bucket) or []:
+            rows.append({"category": label, "text": str(item.get("text") or ""), "source": str(item.get("source") or "Latest report")})
+    return rows[:16]
+
+
+def deterministic_prime_templates(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> list[dict[str, str]]:
+    title = str(opp.get("title") or "Opportunity").strip()
+    agency = str(opp.get("organization") or "Agency not listed").strip()
+    deadline = str(opp.get("dueDisplay") or opp.get("responseDeadline") or "n/a").strip()
+    fit = str(opp.get("fitReason") or "Review the fit rationale and source documents.").strip()
+    requirements = deterministic_requirements(opp, evidence)
+    gaps = deterministic_gap_analysis({**opp, "proposal": {"id": 1, "role": "prime"}}, evidence)
+    rows = _requirement_rows(requirements)
+    req_bullets = _bullet_lines(requirements.get("requirements") or [], "Confirm scope requirements from the solicitation package.")
+    eval_bullets = _bullet_lines(requirements.get("evaluationCriteria") or [], "Identify evaluation criteria from attachments.")
+    submission_bullets = _bullet_lines(requirements.get("submissionInstructions") or [], "Confirm submission instructions and portal/email details.")
+    form_bullets = _bullet_lines(requirements.get("requiredForms") or [], "Confirm required forms, clauses, and representations.")
+    evidence_bullets = _bullet_lines(evidence[:8], "Parse solicitation documents to attach source evidence.")
+    matrix_rows = "\n".join(
+        f"| {row['category']} | {row['text']} | {row['source']} | TBD | Open |" for row in rows
+    ) or "| Requirement | Confirm requirements from solicitation package. | Latest report | TBD | Open |"
+    question_lines = "\n".join(
+        f"- {item['title']}: {item['action']}" for item in gaps.get("gaps", [])[:8]
+    ) or "- Confirm whether all attachments, amendments, and Q&A have been reviewed."
+    return [
+        {
+            "artifactType": "prime-proposal",
+            "title": "Prime Proposal Draft Template",
+            "notes": "Generated deterministic prime template; edit before use.",
+            "content": f"""# Prime Proposal Draft Template\n\n## Opportunity\n- Title: {title}\n- Agency: {agency}\n- Response deadline: {deadline}\n- Initial fit: {fit}\n\n## Executive Summary\nDraft a concise summary of the agency need, proposed outcome, and why the prime offer is low-risk.\n\n## Technical Approach\n{req_bullets}\n\n## Security and Compliance Approach\nDescribe controls, compliance posture, secure delivery workflow, and required certifications or proof points.\n\n## Management and Staffing\nIdentify the capture owner, delivery lead, key roles, teaming needs, schedule, and quality controls.\n\n## Past Performance\nMap relevant projects to the requirement language and evaluation criteria.\n\n## Evaluation Alignment\n{eval_bullets}\n\n## Submission Plan\n{submission_bullets}\n\n## Source Evidence To Review\n{evidence_bullets}\n""",
+        },
+        {
+            "artifactType": "compliance-matrix",
+            "title": "Prime Compliance Matrix",
+            "notes": "Generated from available report text and parsed evidence.",
+            "content": f"""# Prime Compliance Matrix\n\n| Category | Requirement | Source | Response Owner | Status |\n| --- | --- | --- | --- | --- |\n{matrix_rows}\n""",
+        },
+        {
+            "artifactType": "forms-checklist",
+            "title": "Prime Forms and Submission Checklist",
+            "notes": "Use this to track forms, attachments, and submission readiness.",
+            "content": f"""# Prime Forms and Submission Checklist\n\n## Required Forms / Attachments\n{form_bullets}\n\n## Submission Instructions\n{submission_bullets}\n\n## Internal Review Gates\n- Bid/no-bid confirmed\n- Solicitation, amendments, and Q&A reviewed\n- Compliance matrix reviewed\n- Pricing assumptions reviewed\n- Final package owner assigned\n""",
+        },
+        {
+            "artifactType": "questions",
+            "title": "Prime Capture Questions",
+            "notes": "Questions generated from current gaps and unknowns.",
+            "content": f"""# Prime Capture Questions\n\n## Questions / Follow-Ups\n{question_lines}\n\n## Decision Notes\n- Confirm prime responsibility and subcontracting needs.\n- Confirm whether the response window supports a compliant submission.\n- Confirm any certifications, facility, clearance, or past performance gaps.\n""",
+        },
+    ]
+
+
+def generate_prime_proposal_templates(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    notice_id = str(payload.get("noticeId") or "")
+    if not notice_id:
+        raise ValueError("noticeId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    opp = _latest_match(settings, notice_id)
+    if not opp:
+        raise ValueError("Opportunity not found in latest report")
+    proposal = store.proposal_map([notice_id]).get(notice_id) or {}
+    if proposal and proposal.get("role") != "prime":
+        raise ValueError("Prime templates require a prime proposal workspace")
+    if not proposal:
+        proposal = store.create_proposal(notice_id, {"noticeId": notice_id, "title": opp.get("title") or notice_id, "role": "prime"})
+    evidence = store.evidence_snippets(notice_id)
+    generated: list[dict[str, Any]] = []
+    existing = store.proposal_artifacts(notice_id)
+    by_title = {str(item.get("title") or ""): item for item in existing}
+    for template in deterministic_prime_templates({**opp, "proposal": proposal}, evidence):
+        payload = {"noticeId": notice_id, "status": "draft", "format": "markdown", **template}
+        current = by_title.get(template["title"])
+        if current:
+            generated.append(store.update_proposal_artifact(int(current["id"]), payload))
+        else:
+            generated.append(store.add_proposal_artifact(payload))
+    _record_ai_audit(
+        settings,
+        notice_id=notice_id,
+        action="prime_templates",
+        mode="deterministic",
+        provider=settings_summary(settings)["provider"],
+        model=str(settings_summary(settings).get("model") or ""),
+        result="success",
+        message=f"Generated {len(generated)} prime proposal artifact templates.",
+    )
+    return {"ok": True, "mode": "deterministic", "proposal": proposal, "generated": generated, "artifacts": store.proposal_artifacts(notice_id)}
+
+
 def _record_ai_audit(settings: Settings, *, notice_id: str, action: str, mode: str, provider: str, model: str, result: str, message: str = "") -> None:
     try:
         Store(settings.data_dir / "sam-radar.sqlite3").record_ai_audit(
