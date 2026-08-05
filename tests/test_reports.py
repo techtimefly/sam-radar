@@ -123,6 +123,19 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '.filter-group.open,.action-group.open{display:flex}' in html
     assert '.opp.collapsed .follow-row,.opp.collapsed .analysis,.opp.collapsed .workflow,.opp.collapsed .dims{display:none}' in html
     assert '.view-group.more-open button{display:inline-flex}' in html
+    assert 'function configureDetailSurface(surface,origin)' in html
+    assert 'Back to ${returnLabel(origin)}' in html
+    assert '.modal.mobile-record.open{display:block}' in html
+    assert '.modal.mobile-record .modal-close span{position:static' in html
+    assert 'class="manual-controls"' in html
+    assert 'id="manual-expand-all"' in html
+    assert 'id="manual-collapse-all"' in html
+    assert 'class="manual-toggle"' in html
+    assert 'function setManualCollapsed(card,collapsed)' in html
+    assert "openDetail(el.dataset.id,'board')" in html
+    assert "openManualDetail(btn.dataset.id,'manual')" in html
+    assert '.board-view-cta' in html
+    assert '#list-view .opp .facts,#list-view .opp .follow-row' in html
     assert 'id="theme-button"' in html
     assert 'id="theme-button" class="theme-toggle"' in html
     assert ".theme-toggle{min-width:92px;white-space:nowrap}" in html
