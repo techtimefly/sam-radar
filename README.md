@@ -12,6 +12,8 @@ Define your business profile once. SAM Radar searches SAM.gov, scores opportunit
 - Generates a polished HTML report and JSON export
 - Normalizes deadlines to your configured timezone
 - Provides a browser refresh button
+- Adds a manual SAM search workspace that does not overwrite generated reports
+- Prevents manually tracking opportunities already in the report or local tracking store
 - Keeps local seen/history data out of Git
 - Supports Docker and Docker Compose
 - Separates listen address from public `APP_BASE_URL` for reverse proxies
@@ -85,13 +87,13 @@ REPORT_LIMIT=20
 For a homelab site such as:
 
 ```text
-https://sam-radar.example.test
+https://sam-radar.lan
 ```
 
 Use:
 
 ```env
-APP_BASE_URL=https://sam-radar.example.test
+APP_BASE_URL=https://sam-radar.lan
 SAM_RADAR_HOST=0.0.0.0
 SAM_RADAR_PORT=8066
 ```
@@ -101,7 +103,7 @@ Example nginx config:
 ```nginx
 server {
     listen 443 ssl;
-    server_name sam-radar.example.test;
+    server_name sam-radar.lan;
 
     location / {
         proxy_pass http://127.0.0.1:8066;
@@ -116,7 +118,9 @@ server {
 
 ## Pursuit Status Controls
 
-The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`. The v0.4 pipeline adds owner, priority, next action, follow-up date, decision reason, structured no-bid reason, document review links, event history, follow-up queues, pipeline metrics, and an interactive board.
+The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`. The pipeline includes owner, priority, next action, follow-up date, decision reason, structured no-bid reason, document review links, event history, follow-up queues, pipeline metrics, an interactive board, archive/unarchive controls, manual SAM search, and GovCon resource links.
+
+Manual searches call SAM.gov on demand and render temporary results in the browser. They do not rewrite `reports/latest.html`, `reports/latest.json`, or historical report files. Clicking Track requires `APP_WRITE_TOKEN`; SAM Radar rejects manual adds when the notice already appears in the current report, seen history, saved workflow, or manual tracking table.
 
 Status and notes writes require `APP_WRITE_TOKEN`. Generate one with `sam-radar generate-token` or `scripts/generate-token.sh`, save it in `.env`, then use the dashboard Unlock control to store it in your browser. This is separate from your SAM.gov API key. Leave `APP_WRITE_TOKEN` blank to disable browser writes.
 
@@ -136,10 +140,10 @@ Slack and Telegram are optional. Configure either or both in `.env`. Daily diges
 ## Deployment Docs
 
 - `docs/publication.md` covers public GitHub publishing, privacy checks, and issue seeding.
-- `docs/deployment-homelab.md` covers Docker plus `https://sam-radar.example.test` behind nginx.
+- `docs/deployment-homelab.md` covers Docker plus `https://sam-radar.lan` behind nginx.
 - `docs/ux-density.md` documents the pipeline cockpit design direction and responsive QA targets.
 - `docs/navigation-controls.md` documents sticky navigation, back-to-top, and board lane visibility controls.
-- `deploy/nginx/sam-radar.example.test.conf` is an example nginx vhost.
+- `deploy/nginx/sam-radar.lan.conf` is an example nginx vhost.
 
 ## Local Development
 
@@ -159,6 +163,7 @@ sam-radar serve
 - v0.2: scheduler, Slack, Telegram, and richer persistence
 - v0.3: board view, bid/no-bid statuses, notes, watchlist, and CSV export
 - v0.4: opportunity pipeline with detail view, follow-up queue, event history, document review tracking, metrics, and optional workflow notifications
+- v0.5: opportunity control center with archive/unarchive, isolated manual search, duplicate guards, and resource links
 - v1.0: stable self-hosted release
 
 ## Security Notes

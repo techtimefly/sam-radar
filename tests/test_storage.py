@@ -74,3 +74,22 @@ def test_no_bid_reason_validation(tmp_path: Path):
         assert "no_bid_reason must be one of" in str(exc)
     else:
         raise AssertionError("Expected invalid no-bid reason to raise ValueError")
+
+
+def test_manual_tracked_opportunity_prevents_duplicate_adds_without_marking_seen(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    opp = {"noticeId": "manual-1", "title": "Manual Opportunity", "url": "https://sam.gov/opp/manual-1/view"}
+
+    workflow = store.add_manual_tracked(opp)
+
+    assert workflow["status"] == "reviewing"
+    assert workflow["decisionReason"] == "Added from manual SAM search"
+    assert store.is_tracked("manual-1") is True
+    assert store.unseen([{ "noticeId": "manual-1", "title": "Manual Opportunity", "responseDeadline": "" }])
+
+    try:
+        store.add_manual_tracked(opp)
+    except ValueError as exc:
+        assert "already tracked" in str(exc)
+    else:
+        raise AssertionError("Expected duplicate manual opportunity to be rejected")

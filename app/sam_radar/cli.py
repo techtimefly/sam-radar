@@ -8,7 +8,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
 from .config import load_settings
-from .core import refresh_report
+from .core import add_manual_opportunity, manual_search, refresh_report
 from .scheduler import Scheduler
 from .storage import Store
 
@@ -38,6 +38,29 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 self._send_json(200, payload)
             except Exception as exc:  # noqa: BLE001
                 self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path == "/api/manual-search":
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+                payload = json.loads(body.decode("utf-8") or "{}")
+                self._send_json(200, manual_search(self.settings, payload))
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path == "/api/manual-add":
+            if not self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; status writes are disabled."})
+                return
+            if self.headers.get("X-SAM-RADAR-TOKEN") != self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "Invalid or missing APP_WRITE_TOKEN."})
+                return
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+                payload = json.loads(body.decode("utf-8") or "{}")
+                result = add_manual_opportunity(self.settings, payload)
+                self._send_json(409 if result.get("duplicate") else 200, result)
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
             return
         if parsed.path.startswith("/api/status/"):
             if not self.settings.app_write_token:

@@ -149,6 +149,18 @@ class Store:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS manual_tracked_opportunities (
+                  notice_id TEXT PRIMARY KEY,
+                  title TEXT NOT NULL DEFAULT '',
+                  url TEXT NOT NULL DEFAULT '',
+                  source TEXT NOT NULL DEFAULT 'manual-search',
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  added_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _add_event(
         self,
@@ -439,6 +451,50 @@ class Store:
             workflow["documents"] = self._documents(conn, [notice_id]).get(notice_id, [])
             workflow["events"] = self._events(conn, [notice_id]).get(notice_id, [])
         return workflow
+
+
+    def tracked_notice_ids(self) -> set[str]:
+        with self.connect() as conn:
+            ids = {row["notice_id"] for row in conn.execute("SELECT notice_id FROM opportunity_status")}
+            ids.update(row["notice_id"] for row in conn.execute("SELECT notice_id FROM manual_tracked_opportunities"))
+            ids.update(row["notice_id"] for row in conn.execute("SELECT notice_id FROM seen_opportunities"))
+        return ids
+
+    def is_tracked(self, notice_id: str) -> bool:
+        return bool(notice_id and notice_id in self.tracked_notice_ids())
+
+    def add_manual_tracked(self, opp: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(opp.get("noticeId") or opp.get("notice_id"), 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        now = utc_now()
+        with self.connect() as conn:
+            duplicate = conn.execute(
+                """
+                SELECT notice_id FROM manual_tracked_opportunities WHERE notice_id = ?
+                UNION SELECT notice_id FROM seen_opportunities WHERE notice_id = ?
+                UNION SELECT notice_id FROM opportunity_status WHERE notice_id = ?
+                """,
+                (notice_id, notice_id, notice_id),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("already tracked")
+            conn.execute(
+                """
+                INSERT INTO manual_tracked_opportunities (notice_id, title, url, source, payload_json, added_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    notice_id,
+                    clean_text(opp.get("title"), 500),
+                    clean_text(opp.get("url") or opp.get("uiLink"), 1000),
+                    clean_text(opp.get("source") or "manual-search", 80),
+                    json.dumps(opp, sort_keys=True),
+                    now,
+                ),
+            )
+            self._add_event(conn, notice_id, "manual_tracked", "", "manual-search", "Added from manual SAM search", now)
+        return self.set_workflow(notice_id, {"status": "reviewing", "decisionReason": "Added from manual SAM search"})
 
     def record_notification_once(self, notice_id: str, notification_type: str, notification_key: str) -> bool:
         now = utc_now()

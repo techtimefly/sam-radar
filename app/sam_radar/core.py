@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import datetime as dt
+
 from .config import Settings, load_business_profile
 from .digest import build_digest, build_no_new_digest
 from .notifications.slack import send_slack_webhook
 from .notifications.telegram import send_telegram
 from .reports import build_report_payload, days_until, write_reports
-from .scoring import search_opportunities
+from .sam_api import fetch_json, mmddyyyy
+from .scoring import DEFAULT_EXCLUDED_TYPES, is_expired, normalize_opp, score_opp, search_opportunities
 from .storage import Store
 
 
@@ -68,6 +71,80 @@ def send_workflow_notifications(settings: Settings, store: Store, report: dict, 
                 sent.append(f"slack:{event_type}")
     return sent
 
+
+
+def _manual_date(value: str, fallback: dt.date) -> str:
+    if not value:
+        return mmddyyyy(fallback)
+    try:
+        return mmddyyyy(dt.date.fromisoformat(str(value)[:10]))
+    except ValueError:
+        return mmddyyyy(fallback)
+
+
+def _current_report_ids(settings: Settings) -> set[str]:
+    latest = settings.reports_dir / "latest.json"
+    if not latest.exists():
+        return set()
+    try:
+        import json
+
+        data = json.loads(latest.read_text())
+    except Exception:  # noqa: BLE001
+        return set()
+    return {str(match.get("noticeId")) for match in data.get("matches", []) if match.get("noticeId")}
+
+
+def manual_search(settings: Settings, criteria: dict) -> dict:
+    if not settings.sam_gov_api_key:
+        raise RuntimeError("SAM_GOV_API_KEY is required")
+    profile = load_business_profile(settings.profile_path)
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    today = dt.datetime.now(dt.UTC).date()
+    days = max(1, min(int(criteria.get("days") or settings.search_days or 7), 60))
+    posted_from = _manual_date(str(criteria.get("postedFrom") or ""), today - dt.timedelta(days=days))
+    posted_to = _manual_date(str(criteria.get("postedTo") or ""), today)
+    params = {"api_key": settings.sam_gov_api_key, "postedFrom": posted_from, "postedTo": posted_to, "limit": str(max(1, min(int(criteria.get("limit") or 25), 100)))}
+    field_map = {"keyword": "title", "naics": "ncode", "psc": "ccode", "ptype": "ptype", "setAside": "typeOfSetAside"}
+    for source, target in field_map.items():
+        value = str(criteria.get(source) or "").strip()
+        if value:
+            params[target] = value
+    if not any(params.get(key) for key in ["title", "ncode", "ccode", "ptype", "typeOfSetAside"]):
+        raise ValueError("Manual search requires keyword, NAICS, PSC, notice type, or set-aside.")
+    payload = fetch_json(params, timeout=12)
+    now = dt.datetime.now(dt.UTC)
+    current_report_ids = _current_report_ids(settings)
+    tracked_ids = store.tracked_notice_ids() | current_report_ids
+    results = []
+    seen_ids: set[str] = set()
+    for raw in (payload or {}).get("opportunitiesData") or []:
+        notice_id = str(raw.get("noticeId") or raw.get("noticeid") or "")
+        if not notice_id or notice_id in seen_ids:
+            continue
+        seen_ids.add(notice_id)
+        if str(raw.get("type") or "") in DEFAULT_EXCLUDED_TYPES:
+            continue
+        if is_expired(raw, now):
+            continue
+        score, reasons = score_opp(profile, raw)
+        opp = normalize_opp(raw, score, reasons)
+        opp["url"] = opp.get("uiLink") or opp.get("descriptionUrl") or ""
+        opp["manualSearch"] = True
+        opp["alreadyTracked"] = notice_id in tracked_ids
+        opp["trackedReason"] = "Already tracked" if opp["alreadyTracked"] else ""
+        results.append(opp)
+    results.sort(key=lambda item: item.get("score") or 0, reverse=True)
+    return {"ok": True, "criteria": {k: v for k, v in params.items() if k != "api_key"}, "matches": results, "count": len(results), "reportsUnchanged": True}
+
+
+def add_manual_opportunity(settings: Settings, opp: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    notice_id = str(opp.get("noticeId") or "")
+    if notice_id in _current_report_ids(settings) or store.is_tracked(notice_id):
+        return {"ok": False, "duplicate": True, "error": "Already tracked"}
+    workflow = store.add_manual_tracked(opp)
+    return {"ok": True, "workflow": workflow}
 
 def refresh_report(
     settings: Settings,
