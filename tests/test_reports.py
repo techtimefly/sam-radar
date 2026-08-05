@@ -96,6 +96,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'id="proposal-list"' in html
     assert 'class="proposal-create"' in html
     assert 'class="proposal-slot"' in html
+    assert '.proposal-stages{display:flex;flex-wrap:wrap' in html
+    assert '.proposal-stage{flex:1 1 86px;min-width:0' in html
+    assert '.proposal-actions button,.proposal-card button{max-width:100%;white-space:normal}' in html
     assert '/api/proposals/create' in html
     assert '/api/proposals/stage' in html
     assert 'function proposalPanelHtml' in html
