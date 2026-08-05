@@ -259,6 +259,11 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'id="ai-test"' in html
     assert '/api/ai/settings' in html
     assert '/api/ai/test' in html
+    assert 'id="ai-audit-card"' in html
+    assert 'AI Audit' in html
+    assert '/api/ai/audit' in html
+    assert 'function loadAiAudit' in html
+    assert 'No external text transfer' in html
     assert 'function aiSettingsHtml' in html
     assert 'Saving code...' in html
     assert 'Draft profile saved.' in html

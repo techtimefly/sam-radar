@@ -196,3 +196,29 @@ def test_proposal_document_registry_and_evidence_snippets(tmp_path: Path):
     event_types = [event["type"] for event in store.get_status("opp-doc-1")["events"]]
     assert "proposal_document_added" in event_types
     assert "proposal_document_parsed" in event_types
+
+
+def test_ai_audit_events_store_metadata_without_prompt_text(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    event = store.record_ai_audit(
+        {
+            "noticeId": "opp-ai-1",
+            "action": "summary",
+            "provider": "ollama",
+            "mode": "deterministic",
+            "model": "gemma4:64k",
+            "result": "fallback",
+            "external": False,
+            "message": "Summary assist completed.",
+            "prompt": "this should never be stored",
+        }
+    )
+    events = store.ai_audit_events()
+
+    assert event["id"]
+    assert events[0]["noticeId"] == "opp-ai-1"
+    assert events[0]["action"] == "summary"
+    assert events[0]["external"] is False
+    assert "prompt" not in events[0]
+    assert "this should never" not in str(events[0])

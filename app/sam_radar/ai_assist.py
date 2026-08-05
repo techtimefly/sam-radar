@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from typing import Any
 
 from .config import Settings
@@ -131,6 +132,16 @@ def opportunity_requirements(settings: Settings, payload: dict[str, Any]) -> dic
             mode = "ai"
         else:
             warning = response.error or "AI provider returned no requirements; deterministic extraction used."
+    _record_ai_audit(
+        settings,
+        notice_id=notice_id,
+        action="requirements",
+        mode=mode,
+        provider=provider,
+        model=str(ai.get("model") or ""),
+        result="success" if mode == "ai" else "fallback",
+        message=warning or "Requirements assist completed.",
+    )
     return {"ok": True, "mode": mode, "provider": provider, "warning": warning, "requirements": requirements, "aiNotes": ai_notes, "ai": ai}
 
 
@@ -221,7 +232,35 @@ def opportunity_gaps(settings: Settings, payload: dict[str, Any]) -> dict[str, A
             mode = "ai"
         else:
             warning = response.error or "AI provider returned no gap analysis; deterministic analysis used."
+    _record_ai_audit(
+        settings,
+        notice_id=notice_id,
+        action="gaps",
+        mode=mode,
+        provider=provider,
+        model=str(ai.get("model") or ""),
+        result="success" if mode == "ai" else "fallback",
+        message=warning or "Gap assist completed.",
+    )
     return {"ok": True, "mode": mode, "provider": provider, "warning": warning, "analysis": analysis, "aiNotes": ai_notes, "ai": ai}
+
+
+def _record_ai_audit(settings: Settings, *, notice_id: str, action: str, mode: str, provider: str, model: str, result: str, message: str = "") -> None:
+    try:
+        Store(settings.data_dir / "sam-radar.sqlite3").record_ai_audit(
+            {
+                "noticeId": notice_id,
+                "action": action,
+                "provider": provider,
+                "mode": mode,
+                "model": model,
+                "result": result,
+                "external": mode == "ai" and provider == "openai-compatible",
+                "message": message,
+            }
+        )
+    except (OSError, sqlite3.Error):
+        return
 
 
 def deterministic_summary(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
@@ -272,4 +311,14 @@ def opportunity_summary(settings: Settings, payload: dict[str, Any]) -> dict[str
             mode = "ai"
         else:
             warning = response.error or "AI provider returned no summary; deterministic fallback used."
+    _record_ai_audit(
+        settings,
+        notice_id=notice_id,
+        action="summary",
+        mode=mode,
+        provider=provider,
+        model=str(ai.get("model") or ""),
+        result="success" if mode == "ai" else "fallback",
+        message=warning or "Summary assist completed.",
+    )
     return {"ok": True, "mode": mode, "provider": provider, "warning": warning, "summary": base, "ai": ai}

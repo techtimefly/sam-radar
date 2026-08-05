@@ -158,6 +158,11 @@ def ai_settings(settings: Settings) -> dict:
     return {"ok": True, "ai": settings_summary(settings)}
 
 
+def ai_audit_log(settings: Settings) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "events": store.ai_audit_events()}
+
+
 def ai_opportunity_requirements(settings: Settings, payload: dict) -> dict:
     return opportunity_requirements(settings, payload)
 

@@ -11,6 +11,9 @@ def test_ai_defaults_to_no_ai_mode():
     assert normalized_provider(settings) == "none"
     assert ai_mode(settings) == "disabled"
     assert summary["apiKeyConfigured"] is False
+    assert summary["external"] is False
+    assert summary["auditEnabled"] is True
+    assert summary["privacyLabel"] == "No AI provider active"
     assert result["ok"] is True
     assert "deterministic/no-AI" in result["message"]
 
@@ -30,6 +33,8 @@ def test_cloud_mode_reports_privacy_warning_without_exposing_token():
     assert summary["provider"] == "openai-compatible"
     assert summary["mode"] == "cloud"
     assert summary["apiKeyConfigured"] is True
+    assert summary["external"] is True
+    assert "External AI" in summary["privacyLabel"]
     assert "secret-token" not in str(summary)
     assert any("external service" in warning for warning in summary["warnings"])
 

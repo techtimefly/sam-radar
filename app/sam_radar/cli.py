@@ -12,6 +12,7 @@ from .core import (
     add_manual_opportunity,
     add_proposal_document,
     add_search_feedback,
+    ai_audit_log,
     ai_connection_test,
     ai_opportunity_gaps,
     ai_opportunity_requirements,
@@ -58,6 +59,15 @@ class RadarHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/ai/settings":
             self._send_json(200, ai_settings(self.settings))
+            return
+        if parsed.path == "/api/ai/audit":
+            if not self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI audit is disabled."})
+                return
+            if self.headers.get("X-SAM-RADAR-TOKEN") != self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "Invalid or missing APP_WRITE_TOKEN."})
+                return
+            self._send_json(200, ai_audit_log(self.settings))
             return
         if parsed.path.startswith("/api/proposal-documents/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
