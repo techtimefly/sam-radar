@@ -103,7 +103,18 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '/api/proposals/stage' in html
     assert 'function proposalPanelHtml' in html
     assert 'function renderProposals' in html
+    assert 'function proposalWorkspaceHtml' in html
+    assert 'function readinessHtml' in html
+    assert 'function proposalAdjacentStage' in html
+    assert 'id="proposal-workspace"' in html
+    assert 'class="readiness"' in html
+    assert 'class="readiness-bar"' in html
+    assert 'class="missing-list"' in html
+    assert 'class="proposal-workspace-open"' in html
+    assert 'class="proposal-stage-jump"' in html
     assert 'Proposal: Docs' in html
+    assert 'Document review pending' in html
+    assert 'Advance beyond Docs' in html
     assert 'id="detail-modal"' in html
     assert 'name="decisionReason"' in html
     assert 'class="documents"' in html
