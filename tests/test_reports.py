@@ -119,6 +119,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '/api/proposals/create' in html
     assert '/api/proposals/stage' in html
     assert 'function proposalPanelHtml' in html
+    assert 'Summary Assist' in html
+    assert 'function runAiSummary' in html
+    assert '/api/ai/summary' in html
     assert 'function renderProposals' in html
     assert 'function proposalWorkspaceHtml' in html
     assert 'function readinessHtml' in html

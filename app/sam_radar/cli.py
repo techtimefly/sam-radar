@@ -13,6 +13,7 @@ from .core import (
     add_proposal_document,
     add_search_feedback,
     ai_connection_test,
+    ai_opportunity_summary,
     ai_settings,
     create_proposal,
     delete_search_reference_code,
@@ -111,14 +112,20 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path == "/api/ai/test":
+        if parsed.path in {"/api/ai/test", "/api/ai/summary"}:
             if not self.settings.app_write_token:
-                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI connection tests are disabled."})
+                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI actions are disabled."})
                 return
             if self.headers.get("X-SAM-RADAR-TOKEN") != self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "Invalid or missing APP_WRITE_TOKEN."})
                 return
-            self._send_json(200, ai_connection_test(self.settings))
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+                payload = json.loads(body.decode("utf-8") or "{}")
+                result = ai_connection_test(self.settings) if parsed.path == "/api/ai/test" else ai_opportunity_summary(self.settings, payload)
+                self._send_json(200, result)
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
             return
         if parsed.path in {
             "/api/proposals/create",
