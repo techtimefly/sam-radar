@@ -10,10 +10,13 @@ from urllib.parse import unquote, urlparse
 from .config import load_settings
 from .core import (
     add_manual_opportunity,
+    add_proposal_document,
     add_search_feedback,
     create_proposal,
     delete_search_reference_code,
     manual_search,
+    parse_proposal_document,
+    proposal_documents,
     proposal_list,
     refresh_report,
     save_search_profile,
@@ -46,6 +49,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/proposals":
             self._send_json(200, proposal_list(self.settings))
+            return
+        if parsed.path.startswith("/api/proposal-documents/"):
+            notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self._send_json(200, proposal_documents(self.settings, notice_id))
             return
         if self.path in {"/", ""}:
             self.path = "/reports/latest.html"
@@ -98,7 +105,7 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path in {"/api/proposals/create", "/api/proposals/stage"}:
+        if parsed.path in {"/api/proposals/create", "/api/proposals/stage", "/api/proposal-documents/add", "/api/proposal-documents/parse"}:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; proposal writes are disabled."})
                 return
@@ -108,7 +115,14 @@ class RadarHandler(SimpleHTTPRequestHandler):
             try:
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
                 payload = json.loads(body.decode("utf-8") or "{}")
-                result = create_proposal(self.settings, payload) if parsed.path == "/api/proposals/create" else update_proposal(self.settings, payload)
+                if parsed.path == "/api/proposals/create":
+                    result = create_proposal(self.settings, payload)
+                elif parsed.path == "/api/proposals/stage":
+                    result = update_proposal(self.settings, payload)
+                elif parsed.path == "/api/proposal-documents/add":
+                    result = add_proposal_document(self.settings, payload)
+                else:
+                    result = parse_proposal_document(self.settings, payload)
                 self._send_json(200, result)
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})

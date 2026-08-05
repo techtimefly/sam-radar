@@ -5,6 +5,7 @@ import datetime as dt
 from .config import Settings, load_business_profile
 from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
+from .document_intake import parse_registered_document
 from .notifications.slack import send_slack_webhook
 from .notifications.telegram import send_telegram
 from .reports import build_report_payload, days_until, write_reports
@@ -237,6 +238,25 @@ def proposal_list(settings: Settings) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     return {"ok": True, "proposals": store.proposals()}
 
+
+def add_proposal_document(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    document = store.add_proposal_document(payload)
+    return {"ok": True, "document": document, "documents": store.proposal_documents(document["noticeId"])}
+
+
+def parse_proposal_document(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    document_id = int(payload.get("documentId") or payload.get("id") or 0)
+    if not document_id:
+        raise ValueError("documentId is required")
+    return parse_registered_document(settings, store, document_id)
+
+
+def proposal_documents(settings: Settings, notice_id: str) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "documents": store.proposal_documents(notice_id), "evidence": store.evidence_snippets(notice_id)}
+
 def refresh_report(
     settings: Settings,
     *,
@@ -277,6 +297,7 @@ def refresh_report(
     notice_ids = [str(match.get("noticeId")) for match in matches if match.get("noticeId")]
     status_map = store.status_map(notice_ids)
     proposal_map = store.proposal_map(notice_ids)
+    proposal_documents_map = store.proposal_document_map(notice_ids)
     for match in matches:
         notice_id = str(match.get("noticeId") or "")
         workflow = status_map.get(notice_id) or store.get_status(notice_id)
@@ -293,6 +314,8 @@ def refresh_report(
         match["workflowEvents"] = workflow.get("events", [])
         match["workflowUpdatedAt"] = workflow["updatedAt"]
         match["proposal"] = proposal_map.get(notice_id) or {}
+        match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
+        match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
     unseen = store.unseen(matches)
     report = build_report_payload(payload, profile, settings, unseen=unseen)
     paths = write_reports(report, settings)

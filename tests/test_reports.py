@@ -57,6 +57,23 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "workflowDecisionReason": "Strong fit",
                 "workflowDocuments": [{"label": "PWS", "url": "https://example.test/pws.pdf", "reviewed": False}],
                 "workflowEvents": [{"type": "status_changed", "message": "Status changed", "createdAt": "2026-08-05T00:54:39+00:00"}],
+                "proposalDocuments": [
+                    {
+                        "id": 7,
+                        "noticeId": "abc-123",
+                        "sourceType": "url",
+                        "source": "https://example.test/solicitation.txt",
+                        "label": "Solicitation",
+                        "filename": "solicitation.txt",
+                        "contentType": "text/plain",
+                        "sizeBytes": 120,
+                        "parseStatus": "parsed",
+                        "parseError": "",
+                    }
+                ],
+                "evidenceSnippets": [
+                    {"id": 3, "documentId": 7, "section": "Requirements", "snippet": "Offeror must provide secure engineering support."}
+                ],
                 "proposal": {
                     "id": 1,
                     "noticeId": "abc-123",
@@ -106,6 +123,14 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'function proposalWorkspaceHtml' in html
     assert 'function readinessHtml' in html
     assert 'function proposalAdjacentStage' in html
+    assert 'Document Intake' in html
+    assert 'class="document-intake-form"' in html
+    assert 'class="proposal-doc-add refresh"' in html
+    assert 'class="proposal-doc-parse"' in html
+    assert '/api/proposal-documents/add' in html
+    assert '/api/proposal-documents/parse' in html
+    assert '/api/proposal-documents/' in html
+    assert 'Offeror must provide secure engineering support.' in html
     assert 'id="proposal-workspace"' in html
     assert 'class="readiness"' in html
     assert 'class="readiness-bar"' in html

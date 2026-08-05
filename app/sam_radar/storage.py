@@ -46,6 +46,8 @@ PROPOSAL_STAGE_LABELS = {
     "draft": "Draft",
     "review": "Review",
 }
+DOCUMENT_SOURCE_TYPES = {"url", "local-path", "upload"}
+DOCUMENT_PARSE_STATUSES = {"pending", "parsed", "failed", "unsupported"}
 
 
 def proposal_stage_items(current_stage: str) -> list[dict[str, str]]:
@@ -244,6 +246,56 @@ class Store:
                 """
                 CREATE INDEX IF NOT EXISTS idx_proposal_workspaces_stage
                 ON proposal_workspaces (stage, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_documents (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  source_type TEXT NOT NULL DEFAULT 'url',
+                  source TEXT NOT NULL,
+                  label TEXT NOT NULL DEFAULT '',
+                  filename TEXT NOT NULL DEFAULT '',
+                  content_type TEXT NOT NULL DEFAULT '',
+                  size_bytes INTEGER NOT NULL DEFAULT 0,
+                  local_path TEXT NOT NULL DEFAULT '',
+                  parse_status TEXT NOT NULL DEFAULT 'pending',
+                  parse_error TEXT NOT NULL DEFAULT '',
+                  extracted_text_path TEXT NOT NULL DEFAULT '',
+                  reviewed INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  UNIQUE(notice_id, source)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_proposal_documents_notice
+                ON proposal_documents (notice_id, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS evidence_snippets (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  document_id INTEGER NOT NULL,
+                  section TEXT NOT NULL DEFAULT '',
+                  snippet TEXT NOT NULL,
+                  confidence REAL NOT NULL DEFAULT 0,
+                  reviewed INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY(document_id) REFERENCES proposal_documents(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_evidence_snippets_notice
+                ON evidence_snippets (notice_id, document_id)
                 """
             )
 
@@ -815,6 +867,180 @@ class Store:
                 """
             ).fetchall()
         return [self._proposal_from_row(row) for row in rows]
+
+    def _proposal_document_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "sourceType": row["source_type"],
+            "source": row["source"],
+            "label": row["label"],
+            "filename": row["filename"],
+            "contentType": row["content_type"],
+            "sizeBytes": row["size_bytes"],
+            "localPath": row["local_path"],
+            "parseStatus": row["parse_status"],
+            "parseError": row["parse_error"],
+            "extractedTextPath": row["extracted_text_path"],
+            "reviewed": bool(row["reviewed"]),
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def add_proposal_document(self, payload: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(payload.get("noticeId"), 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        source_type = clean_text(payload.get("sourceType") or payload.get("source_type") or "url", 40).lower()
+        if source_type not in DOCUMENT_SOURCE_TYPES:
+            raise ValueError("sourceType must be url, local-path, or upload")
+        source = clean_text(payload.get("source") or payload.get("url") or payload.get("localPath") or payload.get("path"), 1200)
+        if not source:
+            raise ValueError("source is required")
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO proposal_documents
+                  (notice_id, source_type, source, label, filename, content_type, size_bytes, local_path,
+                   parse_status, parse_error, extracted_text_path, reviewed, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', '', ?, ?, ?)
+                ON CONFLICT(notice_id, source) DO UPDATE SET
+                  source_type=excluded.source_type,
+                  label=excluded.label,
+                  filename=excluded.filename,
+                  content_type=excluded.content_type,
+                  local_path=excluded.local_path,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    notice_id,
+                    source_type,
+                    source,
+                    clean_text(payload.get("label"), 220),
+                    clean_text(payload.get("filename"), 260),
+                    clean_text(payload.get("contentType") or payload.get("content_type"), 120),
+                    int(payload.get("sizeBytes") or payload.get("size_bytes") or 0),
+                    clean_text(payload.get("localPath") or payload.get("local_path"), 1200),
+                    1 if payload.get("reviewed", False) else 0,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM proposal_documents WHERE notice_id = ? AND source = ?", (notice_id, source)).fetchone()
+            self._add_event(conn, notice_id, "proposal_document_added", "", source, "Proposal document registered", now)
+        return self._proposal_document_from_row(row)
+
+    def proposal_documents(self, notice_id: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM proposal_documents"
+        params: tuple[Any, ...] = ()
+        if notice_id:
+            sql += " WHERE notice_id = ?"
+            params = (notice_id,)
+        sql += " ORDER BY datetime(updated_at) DESC, id DESC"
+        with self.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._proposal_document_from_row(row) for row in rows]
+
+    def proposal_document(self, document_id: int) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM proposal_documents WHERE id = ?", (document_id,)).fetchone()
+        return self._proposal_document_from_row(row) if row else {}
+
+    def proposal_document_map(self, notice_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        if not notice_ids:
+            return {}
+        placeholders = ",".join("?" for _ in notice_ids)
+        with self.connect() as conn:
+            rows = conn.execute(f"SELECT * FROM proposal_documents WHERE notice_id IN ({placeholders}) ORDER BY id", notice_ids).fetchall()
+        mapped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            mapped.setdefault(row["notice_id"], []).append(self._proposal_document_from_row(row))
+        return mapped
+
+    def update_proposal_document_parse(self, document_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        status = clean_text(payload.get("parseStatus") or payload.get("parse_status") or "pending", 40).lower()
+        if status not in DOCUMENT_PARSE_STATUSES:
+            raise ValueError(f"parseStatus must be one of: {', '.join(sorted(DOCUMENT_PARSE_STATUSES))}")
+        now = utc_now()
+        with self.connect() as conn:
+            existing = conn.execute("SELECT * FROM proposal_documents WHERE id = ?", (document_id,)).fetchone()
+            if not existing:
+                raise ValueError("document does not exist")
+            conn.execute(
+                """
+                UPDATE proposal_documents
+                SET parse_status = ?, parse_error = ?, extracted_text_path = ?, content_type = ?,
+                    size_bytes = ?, local_path = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    clean_text(payload.get("parseError") or payload.get("parse_error"), 1000),
+                    clean_text(payload.get("extractedTextPath") or payload.get("extracted_text_path"), 1200),
+                    clean_text(payload.get("contentType") or payload.get("content_type") or existing["content_type"], 120),
+                    int(payload.get("sizeBytes") or payload.get("size_bytes") or existing["size_bytes"] or 0),
+                    clean_text(payload.get("localPath") or payload.get("local_path") or existing["local_path"], 1200),
+                    now,
+                    document_id,
+                ),
+            )
+            row = conn.execute("SELECT * FROM proposal_documents WHERE id = ?", (document_id,)).fetchone()
+            self._add_event(conn, row["notice_id"], "proposal_document_parsed", existing["parse_status"], status, f"Document parse {status}", now)
+        return self._proposal_document_from_row(row)
+
+    def replace_evidence_snippets(self, notice_id: str, document_id: int, snippets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        notice_id = clean_text(notice_id, 200)
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute("DELETE FROM evidence_snippets WHERE document_id = ?", (document_id,))
+            for item in snippets[:40]:
+                snippet = clean_text(item.get("snippet"), 1200)
+                if not snippet:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO evidence_snippets (notice_id, document_id, section, snippet, confidence, reviewed, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        notice_id,
+                        document_id,
+                        clean_text(item.get("section"), 160),
+                        snippet,
+                        float(item.get("confidence") or 0),
+                        1 if item.get("reviewed", False) else 0,
+                        now,
+                        now,
+                    ),
+                )
+        return self.evidence_snippets(notice_id)
+
+    def evidence_snippets(self, notice_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, notice_id, document_id, section, snippet, confidence, reviewed, created_at, updated_at
+                FROM evidence_snippets
+                WHERE notice_id = ?
+                ORDER BY document_id, id
+                """,
+                (notice_id,),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "noticeId": row["notice_id"],
+                "documentId": row["document_id"],
+                "section": row["section"],
+                "snippet": row["snippet"],
+                "confidence": row["confidence"],
+                "reviewed": bool(row["reviewed"]),
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
 
     def create_proposal(self, notice_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         notice_id = clean_text(notice_id or payload.get("noticeId"), 200)
