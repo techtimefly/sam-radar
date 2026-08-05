@@ -1,4 +1,9 @@
-from sam_radar.descriptions import description_url_with_key, format_description, is_trusted_description_url
+from sam_radar.descriptions import (
+    description_url_with_key,
+    extract_description_body,
+    format_description,
+    is_trusted_description_url,
+)
 
 
 def test_description_url_only_trusts_sam_api_hosts():
@@ -13,3 +18,9 @@ def test_format_description_strips_html_into_paragraphs():
     assert formatted["available"] is True
     assert formatted["paragraphs"] == ["First & main.", "Second line."]
     assert "bad" not in formatted["text"]
+
+
+def test_extract_description_body_reads_sam_json_wrapper():
+    body = extract_description_body('{"description":"<p>Agency needs DevSecOps support.</p>"}')
+    formatted = format_description(body)
+    assert formatted["paragraphs"] == ["Agency needs DevSecOps support."]

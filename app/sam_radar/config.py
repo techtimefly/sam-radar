@@ -107,7 +107,7 @@ def load_settings() -> Settings:
         report_limit=env_int("REPORT_LIMIT", 20),
         search_days=env_int("SEARCH_DAYS", 7),
         enable_descriptions=env_bool("SAM_DESCRIPTION_ENABLED", True),
-        description_fetch_limit=env_int("DESCRIPTION_FETCH_LIMIT", 10),
+        description_fetch_limit=env_int("DESCRIPTION_FETCH_LIMIT", 50),
         enable_scheduler=env_bool("ENABLE_SCHEDULER", False),
         enable_slack=env_bool("ENABLE_SLACK", False),
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),

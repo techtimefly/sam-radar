@@ -5,9 +5,11 @@ import hashlib
 import html
 import json
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -50,14 +52,44 @@ def format_description(value: str, *, max_chars: int = 6000, max_paragraphs: int
     return {"available": bool(paragraphs), "text": "\n".join(paragraphs), "paragraphs": paragraphs}
 
 
+def extract_description_body(value: str) -> str:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if isinstance(payload, dict):
+        description = payload.get("description")
+        if isinstance(description, str):
+            return description
+        for key in ("descriptionText", "text", "content"):
+            body = payload.get(key)
+            if isinstance(body, str):
+                return body
+    return value
+
+
+@contextmanager
+def prefer_ipv4() -> Any:
+    original_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo_ipv4(host: str, port: int, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0):
+        return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = getaddrinfo_ipv4
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
+
+
 def fetch_description(url: str, api_key: str, *, timeout: int = 8) -> str:
     request = urllib.request.Request(
         description_url_with_key(url, api_key),
-        headers={"Accept": "text/html,text/plain,*/*", "User-Agent": "sam-radar/0.1"},
+        headers={"Accept": "application/json", "User-Agent": "curl/8.0 sam-radar/0.1"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8", errors="replace")
+        with prefer_ipv4(), urllib.request.urlopen(request, timeout=timeout) as response:
+            return extract_description_body(response.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:180]
         raise RuntimeError(f"description HTTP {exc.code}: {body}") from exc
