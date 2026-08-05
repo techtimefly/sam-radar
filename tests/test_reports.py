@@ -180,6 +180,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'Prime Templates' in html
     assert 'function generatePrimeArtifacts' in html
     assert '/api/ai/prime-templates' in html
+    assert 'Sub Templates' in html
+    assert 'function generateSubcontractorArtifacts' in html
+    assert '/api/ai/subcontractor-templates' in html
     assert 'Offeror must provide secure engineering support.' in html
     assert 'id="proposal-workspace"' in html
     assert 'class="readiness"' in html

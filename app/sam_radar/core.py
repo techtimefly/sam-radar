@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .ai_assist import (
     generate_prime_proposal_templates,
+    generate_subcontractor_proposal_templates,
     opportunity_gaps,
     opportunity_requirements,
     opportunity_summary,
@@ -178,6 +179,10 @@ def ai_opportunity_gaps(settings: Settings, payload: dict) -> dict:
 
 def ai_prime_templates(settings: Settings, payload: dict) -> dict:
     return generate_prime_proposal_templates(settings, payload)
+
+
+def ai_subcontractor_templates(settings: Settings, payload: dict) -> dict:
+    return generate_subcontractor_proposal_templates(settings, payload)
 
 
 def ai_connection_test(settings: Settings) -> dict:

@@ -6,6 +6,7 @@ from sam_radar.ai_assist import (
     deterministic_requirements,
     deterministic_summary,
     generate_prime_proposal_templates,
+    generate_subcontractor_proposal_templates,
     opportunity_requirements,
     opportunity_summary,
 )
@@ -83,6 +84,55 @@ def test_generate_prime_proposal_templates_creates_and_updates_artifacts(tmp_pat
     assert len(second["artifacts"]) == 4
     assert all(item["version"] == 1 for item in second["generated"])
     assert {event["type"] for event in store.get_status("abc")["events"]} >= {"proposal_created", "proposal_artifact_created"}
+
+
+def test_deterministic_subcontractor_templates_builds_partner_artifacts():
+    from sam_radar.ai_assist import deterministic_subcontractor_templates
+
+    opp = {
+        "title": "Security Support",
+        "organization": "Example Agency",
+        "dueDisplay": "Aug 9, 2026 5:00 PM MDT",
+        "fitReason": "Strong DevSecOps fit.",
+        "descriptionParagraphs": [
+            "Contractor shall provide secure engineering support. Submit a technical proposal by email. Evaluation will consider technical approach."
+        ],
+    }
+    artifacts = deterministic_subcontractor_templates(opp, [{"section": "Security", "snippet": "Offeror must provide CMMC documentation before award."}])
+
+    assert [item["artifactType"] for item in artifacts] == ["subcontractor", "compliance-matrix", "forms-checklist", "questions"]
+    assert "# Subcontractor Capability Response Template" in artifacts[0]["content"]
+    assert "| Category | Requirement | Prime Owner | Subcontractor Owner | Status |" in artifacts[1]["content"]
+    assert "Capability statement" in artifacts[2]["content"]
+    assert "Questions For Prime" in artifacts[3]["content"]
+
+
+def test_generate_subcontractor_templates_creates_partner_workspace(tmp_path: Path):
+    reports = tmp_path / "reports"
+    data = tmp_path / "data"
+    reports.mkdir()
+    report = {
+        "matches": [
+            {
+                "noticeId": "sub-abc",
+                "title": "Security Support",
+                "organization": "Example Agency",
+                "score": 9,
+                "dueDisplay": "Aug 9, 2026 5:00 PM MDT",
+                "fitReason": "Strong DevSecOps fit.",
+                "descriptionParagraphs": ["Contractor shall provide DevSecOps support. Submit quote by email."],
+            }
+        ]
+    }
+    (reports / "latest.json").write_text(json.dumps(report))
+    settings = Settings(sam_gov_api_key="test", reports_dir=reports, data_dir=data)
+
+    result = generate_subcontractor_proposal_templates(settings, {"noticeId": "sub-abc"})
+
+    assert result["ok"] is True
+    assert result["proposal"]["role"] == "subcontractor"
+    assert len(result["generated"]) == 4
+    assert any(item["title"] == "Subcontractor Capability Response Template" for item in result["artifacts"])
 
 
 def test_opportunity_summary_falls_back_without_ai(tmp_path: Path):
