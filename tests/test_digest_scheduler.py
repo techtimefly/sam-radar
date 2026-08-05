@@ -1,7 +1,10 @@
 import datetime as dt
+import json
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sam_radar.config import BusinessProfile, Settings
+from sam_radar.core import notification_preview
 from sam_radar.digest import build_digest
 from sam_radar.scheduler import next_run, parse_daily_cron
 
@@ -31,3 +34,58 @@ def test_daily_cron_next_run_rolls_to_tomorrow_when_elapsed():
     run_at = next_run(now, "0 6 * * *")
     assert run_at.date() == dt.date(2026, 8, 5)
     assert run_at.hour == 6
+
+
+def test_notification_preview_uses_latest_report_without_sending(tmp_path: Path):
+    profile_path = tmp_path / "business.yaml"
+    profile_path.write_text(
+        """
+business:
+  name: Example LLC
+  dba: Example
+capabilities:
+  - security
+keywords:
+  strong:
+    - security
+""".lstrip()
+    )
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    report = {
+        "summary": {"postedFrom": "08/01/2026", "postedTo": "08/04/2026"},
+        "matches": [
+            {
+                "noticeId": "preview-1",
+                "title": "Security Support",
+                "organization": "Example Agency",
+                "postedDate": "2026-08-04",
+                "responseDeadline": "2026-08-10T09:00:00-04:00",
+                "score": 10,
+                "recommendation": "Pursue",
+                "workflowStatus": "pursue",
+                "workflowNextAction": "Pull attachments",
+                "reasons": ["keywords: security"],
+                "url": "https://sam.gov/opp/preview-1/view",
+            }
+        ],
+    }
+    (reports / "latest.json").write_text(json.dumps(report))
+    settings = Settings(
+        sam_gov_api_key="test",
+        profile_path=profile_path,
+        reports_dir=reports,
+        app_base_url="https://sam-radar.example.test",
+        timezone="America/Denver",
+    )
+
+    digest = notification_preview(settings)
+    workflow = notification_preview(settings, {"noticeId": "preview-1", "eventType": "pursue"})
+
+    assert digest["ok"] is True
+    assert digest["type"] == "digest"
+    assert "SAM Radar - Example" in digest["message"]
+    assert "Full report: https://sam-radar.example.test/reports/latest.html" in digest["message"]
+    assert workflow["type"] == "workflow"
+    assert "SAM Radar workflow: pursue" in workflow["message"]
+    assert "SAM.gov: https://sam.gov/opp/preview-1/view" in workflow["message"]

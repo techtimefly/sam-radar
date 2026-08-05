@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import json
 import re
 from pathlib import Path
 
@@ -54,6 +55,56 @@ def workflow_notification_text(event_type: str, opp: dict, report_url: str) -> s
             f"Pipeline: {report_url}",
         ]
     )
+
+
+
+def notification_preview(settings: Settings, payload: dict | None = None) -> dict:
+    payload = payload or {}
+    profile = load_business_profile(settings.profile_path)
+    report_url = settings.latest_report_url
+    report: dict = {"summary": {}, "matches": []}
+    latest_json = settings.reports_dir / "latest.json"
+    if latest_json.exists():
+        report = json.loads(latest_json.read_text() or "{}")
+    matches = list(report.get("matches") or [])
+    notice_id = str(payload.get("noticeId") or "").strip()
+    event_type = str(payload.get("eventType") or "").strip()
+    if notice_id and event_type:
+        opp = next((match for match in matches if str(match.get("noticeId") or "") == notice_id), None)
+        if not opp:
+            raise ValueError("noticeId not found in latest report")
+        message = workflow_notification_text(event_type, opp, report_url)
+        preview_type = "workflow"
+    elif matches:
+        summary = report.get("summary") or {}
+        max_items = max(1, min(int(payload.get("maxItems") or 7), 15))
+        message = build_digest(
+            matches,
+            profile,
+            settings,
+            str(summary.get("postedFrom") or ""),
+            str(summary.get("postedTo") or ""),
+            report_url,
+            max_items=max_items,
+        )
+        preview_type = "digest"
+    else:
+        summary = report.get("summary") or {}
+        message = build_no_new_digest(
+            profile,
+            str(summary.get("postedFrom") or ""),
+            str(summary.get("postedTo") or ""),
+            report_url,
+        )
+        preview_type = "no-new"
+    return {
+        "ok": True,
+        "type": preview_type,
+        "message": message,
+        "length": len(message),
+        "slackConfigured": bool(settings.enable_slack and settings.slack_webhook_url),
+        "telegramConfigured": bool(settings.enable_telegram and settings.telegram_bot_token and settings.telegram_chat_id),
+    }
 
 
 def send_workflow_notifications(settings: Settings, store: Store, report: dict, report_url: str) -> list[str]:

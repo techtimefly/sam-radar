@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from sam_radar.config import BusinessProfile, Settings
-from sam_radar.reports import build_html_report, build_report_payload
+from sam_radar.reports import build_csv_report, build_html_report, build_report_payload, write_reports
 
 
 def test_report_uses_configured_business_name_and_normalized_time(tmp_path: Path):
@@ -336,3 +336,43 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'Updated: Aug 4, 2026 6:54 PM MDT' in html
     assert '<script id="report-data" type="application/json">{"summary"' in html
     assert '&quot;summary&quot;' not in html
+
+
+def test_report_writes_csv_export_and_toolbar_link(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(
+        sam_gov_api_key="test",
+        reports_dir=tmp_path,
+        app_base_url="https://sam-radar.example.test",
+        timezone="America/Denver",
+    )
+    payload = {
+        "postedFrom": "08/01/2026",
+        "postedTo": "08/04/2026",
+        "matches": [
+            {
+                "noticeId": "csv-1",
+                "title": "Security, Support",
+                "organization": "Example Agency",
+                "type": "Solicitation",
+                "postedDate": "2026-08-04",
+                "responseDeadline": "2026-08-10T09:00:00-04:00",
+                "score": 10,
+                "reasons": ["keywords: security"],
+                "recommendation": "Pursue",
+                "uiLink": "https://sam.gov/opp/csv-1/view",
+            }
+        ],
+        "errors": [],
+    }
+    report = build_report_payload(payload, profile, settings, unseen=payload["matches"])
+    csv_text = build_csv_report(report)
+    paths = write_reports(report, settings)
+    html = (tmp_path / "latest.html").read_text()
+
+    assert "notice_id,title,agency" in csv_text
+    assert 'csv-1,"Security, Support",Example Agency' in csv_text
+    assert (tmp_path / "latest.csv").exists()
+    assert paths["latestCsvUrl"] == "https://sam-radar.example.test/reports/latest.csv"
+    assert paths["csvPath"].endswith(".csv")
+    assert 'href="/reports/latest.csv"' in html
