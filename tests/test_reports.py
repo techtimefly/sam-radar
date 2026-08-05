@@ -57,6 +57,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "workflowDecisionReason": "Strong fit",
                 "workflowDocuments": [{"label": "PWS", "url": "https://example.test/pws.pdf", "reviewed": False}],
                 "workflowEvents": [{"type": "status_changed", "message": "Status changed", "createdAt": "2026-08-05T00:54:39+00:00"}],
+                "descriptionUrl": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=abc-123",
+                "descriptionParagraphs": ["The agency needs secure engineering support.", "Work includes training and compliance automation."],
+                "descriptionStatus": "available",
             }
         ],
         "errors": [],
@@ -121,7 +124,7 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'initializeListDensity()' in html
     assert '.mobile-menu-row{display:none}' in html
     assert '.filter-group.open,.action-group.open{display:flex}' in html
-    assert '.opp.collapsed .follow-row,.opp.collapsed .analysis,.opp.collapsed .workflow,.opp.collapsed .dims{display:none}' in html
+    assert '.opp.collapsed .follow-row,.opp.collapsed .analysis,.opp.collapsed .description-preview,.opp.collapsed .workflow,.opp.collapsed .dims{display:none}' in html
     assert '.view-group.more-open button{display:inline-flex}' in html
     assert 'function configureDetailSurface(surface,origin)' in html
     assert 'Back to ${returnLabel(origin)}' in html
@@ -136,6 +139,12 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert "openManualDetail(btn.dataset.id,'manual')" in html
     assert '.board-view-cta' in html
     assert '#list-view .opp .facts,#list-view .opp .follow-row' in html
+    assert 'class="description-preview"' in html
+    assert 'class="detail-description"' in html
+    assert 'class="manual-detail-description"' in html
+    assert 'function descriptionHtml(opp)' in html
+    assert 'The agency needs secure engineering support.' in html
+    assert 'SAM.gov Description' in html
     assert 'id="theme-button"' in html
     assert 'id="theme-button" class="theme-toggle"' in html
     assert ".theme-toggle{min-width:92px;white-space:nowrap}" in html

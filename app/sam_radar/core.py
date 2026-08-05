@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 
 from .config import Settings, load_business_profile
+from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
 from .notifications.slack import send_slack_webhook
 from .notifications.telegram import send_telegram
@@ -135,7 +136,14 @@ def manual_search(settings: Settings, criteria: dict) -> dict:
         opp["trackedReason"] = "Already tracked" if opp["alreadyTracked"] else ""
         results.append(opp)
     results.sort(key=lambda item: item.get("score") or 0, reverse=True)
-    return {"ok": True, "criteria": {k: v for k, v in params.items() if k != "api_key"}, "matches": results, "count": len(results), "reportsUnchanged": True}
+    description_errors = enrich_descriptions(
+        results,
+        api_key=settings.sam_gov_api_key,
+        data_dir=settings.data_dir,
+        enabled=settings.enable_descriptions,
+        limit=min(settings.description_fetch_limit, len(results)),
+    )
+    return {"ok": True, "criteria": {k: v for k, v in params.items() if k != "api_key"}, "matches": results, "count": len(results), "reportsUnchanged": True, "descriptionErrors": description_errors}
 
 
 def add_manual_opportunity(settings: Settings, opp: dict) -> dict:
@@ -164,6 +172,15 @@ def refresh_report(
         max_results=settings.report_limit,
     )
     matches = payload.get("matches") or []
+    description_errors = enrich_descriptions(
+        matches,
+        api_key=settings.sam_gov_api_key,
+        data_dir=settings.data_dir,
+        enabled=settings.enable_descriptions,
+        limit=settings.description_fetch_limit,
+    )
+    if description_errors:
+        payload.setdefault("errors", []).extend(f"description: {error}" for error in description_errors)
     status_map = store.status_map([str(match.get("noticeId")) for match in matches if match.get("noticeId")])
     for match in matches:
         notice_id = str(match.get("noticeId") or "")

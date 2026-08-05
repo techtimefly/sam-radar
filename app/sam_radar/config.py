@@ -71,6 +71,8 @@ class Settings:
     app_write_token: str = ""
     report_limit: int = 20
     search_days: int = 7
+    enable_descriptions: bool = True
+    description_fetch_limit: int = 10
     enable_scheduler: bool = False
     enable_slack: bool = False
     slack_webhook_url: str = ""
@@ -104,6 +106,8 @@ def load_settings() -> Settings:
         app_write_token=os.getenv("APP_WRITE_TOKEN", ""),
         report_limit=env_int("REPORT_LIMIT", 20),
         search_days=env_int("SEARCH_DAYS", 7),
+        enable_descriptions=env_bool("SAM_DESCRIPTION_ENABLED", True),
+        description_fetch_limit=env_int("DESCRIPTION_FETCH_LIMIT", 10),
         enable_scheduler=env_bool("ENABLE_SCHEDULER", False),
         enable_slack=env_bool("ENABLE_SLACK", False),
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),
