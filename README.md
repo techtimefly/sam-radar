@@ -116,7 +116,7 @@ server {
 
 ## Pursuit Status Controls
 
-The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`.
+The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`. The v0.4 pipeline adds owner, priority, next action, follow-up date, decision reason, structured no-bid reason, document review links, event history, follow-up queues, pipeline metrics, and an interactive board.
 
 Status and notes writes require `APP_WRITE_TOKEN`. Generate one with `sam-radar generate-token` or `scripts/generate-token.sh`, save it in `.env`, then use the dashboard Unlock control to store it in your browser. This is separate from your SAM.gov API key. Leave `APP_WRITE_TOKEN` blank to disable browser writes.
 
@@ -131,7 +131,7 @@ REFRESH_CRON=0 6 * * *
 
 Scheduled refreshes call SAM.gov, generate reports, send enabled notification channels when unseen matches exist, and then mark those unseen matches as seen. Manual web refresh does not notify or mark seen.
 
-Slack and Telegram are optional. Configure either or both in `.env`.
+Slack and Telegram are optional. Configure either or both in `.env`. Daily digest notifications remain the default. Optional workflow Slack notifications can be enabled with `ENABLE_SLACK_WORKFLOW=true` and narrowed with `SLACK_WORKFLOW_EVENTS=pursue,submitted,due-soon,follow-up-due`; duplicate workflow alerts are suppressed locally.
 
 ## Deployment Docs
 
@@ -156,6 +156,7 @@ sam-radar serve
 - v0.1: public Docker MVP with configurable search and report dashboard
 - v0.2: scheduler, Slack, Telegram, and richer persistence
 - v0.3: board view, bid/no-bid statuses, notes, watchlist, and CSV export
+- v0.4: opportunity pipeline with detail view, follow-up queue, event history, document review tracking, metrics, and optional workflow notifications
 - v1.0: stable self-hosted release
 
 ## Security Notes

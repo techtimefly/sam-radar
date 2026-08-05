@@ -50,6 +50,13 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "workflowStatus": "teaming",
                 "workflowNotes": "Ask partner about FedRAMP past performance.",
                 "workflowUpdatedAt": "2026-08-05T00:54:39+00:00",
+                "workflowPriority": "urgent",
+                "workflowOwner": "Capture Lead",
+                "workflowNextAction": "Pull the PWS",
+                "workflowFollowUpAt": "2026-08-06",
+                "workflowDecisionReason": "Strong fit",
+                "workflowDocuments": [{"label": "PWS", "url": "https://example.test/pws.pdf", "reviewed": False}],
+                "workflowEvents": [{"type": "status_changed", "message": "Status changed", "createdAt": "2026-08-05T00:54:39+00:00"}],
             }
         ],
         "errors": [],
@@ -65,6 +72,13 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'X-SAM-RADAR-TOKEN' in html
     assert 'samRadarWriteToken' in html
     assert 'data-view="board"' in html
+    assert 'data-view="queue"' in html
+    assert 'id="detail-modal"' in html
+    assert 'name="decisionReason"' in html
+    assert 'class="documents"' in html
+    assert 'class="timeline"' in html
     assert 'id="theme-button"' in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
     assert 'Updated: Aug 4, 2026 6:54 PM MDT' in html
+    assert '<script id="report-data" type="application/json">{"summary"' in html
+    assert '&quot;summary&quot;' not in html

@@ -51,7 +51,7 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
                 payload = json.loads(body.decode("utf-8") or "{}")
                 store = Store(self.settings.data_dir / "sam-radar.sqlite3")
-                workflow = store.set_status(notice_id, str(payload.get("status") or ""), str(payload.get("notes") or ""))
+                workflow = store.set_workflow(notice_id, payload)
                 self._send_json(200, {"ok": True, "workflow": workflow})
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})

@@ -75,6 +75,8 @@ class Settings:
     enable_slack: bool = False
     slack_webhook_url: str = ""
     slack_channel_id: str = ""
+    enable_slack_workflow: bool = False
+    slack_workflow_events: list[str] = field(default_factory=lambda: ["pursue", "submitted", "due-soon", "follow-up-due"])
     enable_telegram: bool = False
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -106,6 +108,8 @@ def load_settings() -> Settings:
         enable_slack=env_bool("ENABLE_SLACK", False),
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),
         slack_channel_id=os.getenv("SLACK_CHANNEL_ID", ""),
+        enable_slack_workflow=env_bool("ENABLE_SLACK_WORKFLOW", False),
+        slack_workflow_events=env_list("SLACK_WORKFLOW_EVENTS") or ["pursue", "submitted", "due-soon", "follow-up-due"],
         enable_telegram=env_bool("ENABLE_TELEGRAM", False),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
