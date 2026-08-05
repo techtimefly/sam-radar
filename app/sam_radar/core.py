@@ -361,6 +361,11 @@ def proposal_artifacts(settings: Settings, notice_id: str) -> dict:
     return {"ok": True, "artifacts": store.proposal_artifacts(notice_id)}
 
 
+def proposal_artifact_history(settings: Settings, artifact_id: int) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "history": store.proposal_artifact_history(artifact_id)}
+
+
 def add_proposal_artifact(settings: Settings, payload: dict) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     artifact = store.add_proposal_artifact(payload)

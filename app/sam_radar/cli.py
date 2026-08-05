@@ -25,6 +25,7 @@ from .core import (
     delete_search_reference_code,
     manual_search,
     parse_proposal_document,
+    proposal_artifact_history,
     proposal_artifacts,
     proposal_documents,
     proposal_list,
@@ -77,6 +78,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/proposal-documents/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self._send_json(200, proposal_documents(self.settings, notice_id))
+            return
+        if parsed.path.startswith("/api/proposal-artifact-history/"):
+            artifact_id = int(unquote(parsed.path.rsplit("/", 1)[-1]) or 0)
+            self._send_json(200, proposal_artifact_history(self.settings, artifact_id))
             return
         if parsed.path.startswith("/api/proposal-artifacts/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])

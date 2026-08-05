@@ -227,6 +227,10 @@ def test_proposal_artifact_registry_updates_versions_and_events(tmp_path: Path):
     assert updated["version"] == 2
     assert store.proposal_artifacts("opp-artifact-1")[0]["id"] == artifact["id"]
     assert store.proposal_artifact_map(["opp-artifact-1"])["opp-artifact-1"][0]["status"] == "review"
+    history = store.proposal_artifact_history(artifact["id"])
+    assert [item["version"] for item in history] == [2, 1]
+    assert history[0]["status"] == "review"
+    assert history[1]["content"] == "# Outline"
 
     event_types = [event["type"] for event in store.get_status("opp-artifact-1")["events"]]
     assert "proposal_artifact_created" in event_types
