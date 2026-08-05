@@ -125,6 +125,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'Requirements Assist' in html
     assert 'function runRequirementsAssist' in html
     assert '/api/ai/requirements' in html
+    assert 'Gap Assist' in html
+    assert 'function runGapAssist' in html
+    assert '/api/ai/gaps' in html
     assert 'function renderProposals' in html
     assert 'function proposalWorkspaceHtml' in html
     assert 'function readinessHtml' in html

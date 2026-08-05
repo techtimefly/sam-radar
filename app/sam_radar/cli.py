@@ -13,6 +13,7 @@ from .core import (
     add_proposal_document,
     add_search_feedback,
     ai_connection_test,
+    ai_opportunity_gaps,
     ai_opportunity_requirements,
     ai_opportunity_summary,
     ai_settings,
@@ -113,7 +114,7 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path in {"/api/ai/test", "/api/ai/summary", "/api/ai/requirements"}:
+        if parsed.path in {"/api/ai/test", "/api/ai/summary", "/api/ai/requirements", "/api/ai/gaps"}:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI actions are disabled."})
                 return
@@ -127,6 +128,8 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = ai_connection_test(self.settings)
                 elif parsed.path == "/api/ai/requirements":
                     result = ai_opportunity_requirements(self.settings, payload)
+                elif parsed.path == "/api/ai/gaps":
+                    result = ai_opportunity_gaps(self.settings, payload)
                 else:
                     result = ai_opportunity_summary(self.settings, payload)
                 self._send_json(200, result)

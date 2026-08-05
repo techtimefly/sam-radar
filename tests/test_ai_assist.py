@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from sam_radar.ai_assist import (
+    deterministic_gap_analysis,
     deterministic_requirements,
     deterministic_summary,
     opportunity_requirements,
@@ -109,3 +110,51 @@ def test_opportunity_requirements_falls_back_without_ai(tmp_path: Path):
     assert result["provider"] == "none"
     assert result["requirements"]["requirements"]
     assert result["requirements"]["evaluationCriteria"]
+
+
+def test_deterministic_gap_analysis_flags_capture_blockers():
+    opp = {
+        "title": "CMMC Support",
+        "score": 9,
+        "fitReason": "Strong DevSecOps and CMMC fit.",
+        "descriptionParagraphs": [
+            "Contractor shall provide secure engineering support. Evaluation will consider technical approach and past performance. Include SF 1449."
+        ],
+        "urgency": "high",
+    }
+    result = deterministic_gap_analysis(opp, [])
+    titles = [item["title"] for item in result["gaps"]]
+
+    assert "Proposal workspace not started" in titles
+    assert "Solicitation package not registered" in titles
+    assert "Compliance evidence needed" in titles
+    assert "Compressed response window" in titles
+    assert result["strengths"]
+
+
+def test_opportunity_gaps_falls_back_without_ai(tmp_path: Path):
+    reports = tmp_path / "reports"
+    data = tmp_path / "data"
+    reports.mkdir()
+    report = {
+        "matches": [
+            {
+                "noticeId": "abc",
+                "title": "Security Support",
+                "score": 8,
+                "fitReason": "Security fit based on CMMC.",
+                "descriptionParagraphs": ["Contractor shall provide DevSecOps support."],
+            }
+        ]
+    }
+    (reports / "latest.json").write_text(json.dumps(report))
+    settings = Settings(sam_gov_api_key="test", reports_dir=reports, data_dir=data)
+
+    from sam_radar.ai_assist import opportunity_gaps
+
+    result = opportunity_gaps(settings, {"noticeId": "abc"})
+
+    assert result["ok"] is True
+    assert result["mode"] == "deterministic"
+    assert result["provider"] == "none"
+    assert result["analysis"]["gaps"]
