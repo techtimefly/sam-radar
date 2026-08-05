@@ -110,6 +110,19 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '.lane-head{position:sticky' not in html
     assert '.lane-cards{display:grid;align-content:start;gap:8px;min-width:0}' in html
     assert '.toolbar{position:static}' not in html
+    assert 'id="filter-menu-button"' in html
+    assert 'id="tools-menu-button"' in html
+    assert 'id="more-view-button"' in html
+    assert 'class="list-controls"' in html
+    assert 'id="expand-all"' in html
+    assert 'id="collapse-all"' in html
+    assert 'class="card-toggle"' in html
+    assert 'function setCardCollapsed(card,collapsed)' in html
+    assert 'initializeListDensity()' in html
+    assert '.mobile-menu-row{display:none}' in html
+    assert '.filter-group.open,.action-group.open{display:flex}' in html
+    assert '.opp.collapsed .follow-row,.opp.collapsed .analysis,.opp.collapsed .workflow,.opp.collapsed .dims{display:none}' in html
+    assert '.view-group.more-open button{display:inline-flex}' in html
     assert 'id="theme-button"' in html
     assert 'id="theme-button" class="theme-toggle"' in html
     assert ".theme-toggle{min-width:92px;white-space:nowrap}" in html
