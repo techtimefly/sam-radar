@@ -161,6 +161,47 @@ class Store:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS saved_reference_codes (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  kind TEXT NOT NULL,
+                  code TEXT NOT NULL,
+                  title TEXT NOT NULL DEFAULT '',
+                  description TEXT NOT NULL DEFAULT '',
+                  notes TEXT NOT NULL DEFAULT '',
+                  active INTEGER NOT NULL DEFAULT 1,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  UNIQUE(kind, code)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS saved_search_profiles (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name TEXT NOT NULL UNIQUE,
+                  description TEXT NOT NULL DEFAULT '',
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  active INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS search_feedback (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  profile_name TEXT NOT NULL DEFAULT '',
+                  notes TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
 
     def _add_event(
         self,
@@ -452,6 +493,217 @@ class Store:
             workflow["events"] = self._events(conn, [notice_id]).get(notice_id, [])
         return workflow
 
+
+
+    def save_reference_code(self, payload: dict[str, Any]) -> dict[str, Any]:
+        kind = clean_text(payload.get("kind"), 20).lower()
+        if kind not in {"naics", "psc"}:
+            raise ValueError("kind must be naics or psc")
+        code = clean_text(payload.get("code"), 20).upper()
+        if not code:
+            raise ValueError("code is required")
+        now = utc_now()
+        values = (
+            kind,
+            code,
+            clean_text(payload.get("title"), 300),
+            clean_text(payload.get("description"), 1200),
+            clean_text(payload.get("notes"), 1200),
+            1 if payload.get("active", True) else 0,
+            now,
+            now,
+        )
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO saved_reference_codes
+                  (kind, code, title, description, notes, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(kind, code) DO UPDATE SET
+                  title=excluded.title,
+                  description=excluded.description,
+                  notes=excluded.notes,
+                  active=excluded.active,
+                  updated_at=excluded.updated_at
+                """,
+                values,
+            )
+        return self.saved_reference_code(kind, code)
+
+    def saved_reference_code(self, kind: str, code: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, kind, code, title, description, notes, active, created_at, updated_at
+                FROM saved_reference_codes WHERE kind = ? AND code = ?
+                """,
+                (kind, code),
+            ).fetchone()
+        if not row:
+            return {}
+        return {
+            "id": row["id"],
+            "kind": row["kind"],
+            "code": row["code"],
+            "title": row["title"],
+            "description": row["description"],
+            "notes": row["notes"],
+            "active": bool(row["active"]),
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def saved_reference_codes(self, kind: str | None = None) -> list[dict[str, Any]]:
+        sql = """
+            SELECT id, kind, code, title, description, notes, active, created_at, updated_at
+            FROM saved_reference_codes
+        """
+        params: tuple[Any, ...] = ()
+        if kind:
+            sql += " WHERE kind = ?"
+            params = (kind,)
+        sql += " ORDER BY kind, code"
+        with self.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "kind": row["kind"],
+                "code": row["code"],
+                "title": row["title"],
+                "description": row["description"],
+                "notes": row["notes"],
+                "active": bool(row["active"]),
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def delete_reference_code(self, payload: dict[str, Any]) -> dict[str, Any]:
+        kind = clean_text(payload.get("kind"), 20).lower()
+        if kind not in {"naics", "psc"}:
+            raise ValueError("kind must be naics or psc")
+        code = clean_text(payload.get("code"), 20).upper()
+        if not code:
+            raise ValueError("code is required")
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM saved_reference_codes WHERE kind = ? AND code = ?", (kind, code))
+        return {"kind": kind, "code": code, "deleted": cur.rowcount > 0}
+
+    def save_search_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        name = clean_text(payload.get("name"), 160)
+        if not name:
+            raise ValueError("name is required")
+        now = utc_now()
+        profile = {
+            "name": name,
+            "description": clean_text(payload.get("description"), 1200),
+            "keywords": [clean_text(item, 100) for item in payload.get("keywords", []) if clean_text(item, 100)],
+            "naics": [clean_text(item, 20).upper() for item in payload.get("naics", []) if clean_text(item, 20)],
+            "psc": [clean_text(item, 20).upper() for item in payload.get("psc", []) if clean_text(item, 20)],
+            "setAsides": [clean_text(item, 40).upper() for item in payload.get("setAsides", []) if clean_text(item, 40)],
+            "noticeTypes": [clean_text(item, 10).lower() for item in payload.get("noticeTypes", []) if clean_text(item, 10)],
+            "exclusions": [clean_text(item, 120) for item in payload.get("exclusions", []) if clean_text(item, 120)],
+            "days": int(payload.get("days") or 7),
+            "limit": int(payload.get("limit") or 25),
+            "active": bool(payload.get("active", False)),
+        }
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO saved_search_profiles (name, description, payload_json, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                  description=excluded.description,
+                  payload_json=excluded.payload_json,
+                  active=excluded.active,
+                  updated_at=excluded.updated_at
+                """,
+                (name, profile["description"], json.dumps(profile, sort_keys=True), 1 if profile["active"] else 0, now, now),
+            )
+        return self.saved_search_profile(name)
+
+    def saved_search_profile(self, name: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, name, description, payload_json, active, created_at, updated_at
+                FROM saved_search_profiles WHERE name = ?
+                """,
+                (name,),
+            ).fetchone()
+        if not row:
+            return {}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        payload.update({"id": row["id"], "name": row["name"], "active": bool(row["active"]), "createdAt": row["created_at"], "updatedAt": row["updated_at"]})
+        return payload
+
+    def saved_search_profiles(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, name, description, payload_json, active, created_at, updated_at
+                FROM saved_search_profiles ORDER BY active DESC, name
+                """
+            ).fetchall()
+        profiles = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            payload.update({"id": row["id"], "name": row["name"], "active": bool(row["active"]), "createdAt": row["created_at"], "updatedAt": row["updated_at"]})
+            profiles.append(payload)
+        return profiles
+
+    def add_search_feedback(self, payload: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(payload.get("noticeId"), 200)
+        reason = clean_text(payload.get("reason"), 120)
+        if not notice_id or not reason:
+            raise ValueError("noticeId and reason are required")
+        now = utc_now()
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO search_feedback (notice_id, reason, profile_name, notes, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (notice_id, reason, clean_text(payload.get("profileName"), 160), clean_text(payload.get("notes"), 1200), now),
+            )
+            feedback_id = cur.lastrowid
+        return {"id": feedback_id, "noticeId": notice_id, "reason": reason, "createdAt": now}
+
+    def search_feedback_summary(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT reason, COUNT(*) AS count, MAX(created_at) AS last_seen
+                FROM search_feedback GROUP BY reason ORDER BY count DESC, reason
+                """
+            ).fetchall()
+        return [{"reason": row["reason"], "count": row["count"], "lastSeen": row["last_seen"]} for row in rows]
+
+    def profile_quality(self) -> list[dict[str, Any]]:
+        profiles = self.saved_search_profiles()
+        feedback = self.search_feedback_summary()
+        feedback_count = sum(item["count"] for item in feedback)
+        return [
+            {
+                "name": profile["name"],
+                "active": profile.get("active", False),
+                "naicsCount": len(profile.get("naics") or []),
+                "pscCount": len(profile.get("psc") or []),
+                "keywordCount": len(profile.get("keywords") or []),
+                "setAsideCount": len(profile.get("setAsides") or []),
+                "feedbackCount": feedback_count,
+                "recommendation": "Tune" if feedback_count >= 5 else "Monitor" if profile.get("active") else "Draft",
+            }
+            for profile in profiles
+        ]
 
     def manual_tracked_opportunities(self) -> list[dict[str, Any]]:
         with self.connect() as conn:

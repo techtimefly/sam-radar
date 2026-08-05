@@ -10,6 +10,7 @@ from .notifications.telegram import send_telegram
 from .reports import build_report_payload, days_until, write_reports
 from .sam_api import fetch_json, mmddyyyy
 from .scoring import DEFAULT_EXCLUDED_TYPES, is_expired, normalize_opp, score_opp, search_opportunities
+from .search_intel import SET_ASIDES, search_reference, set_asides_for_status, suggest_profiles
 from .storage import Store
 
 
@@ -96,6 +97,57 @@ def _current_report_ids(settings: Settings) -> set[str]:
     return {str(match.get("noticeId")) for match in data.get("matches", []) if match.get("noticeId")}
 
 
+
+def search_intelligence(settings: Settings, query: str = "") -> dict:
+    profile = load_business_profile(settings.profile_path)
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    status_text = list(getattr(profile, "set_asides", []) or [])
+    saved_profiles = store.saved_search_profiles()
+    return {
+        "ok": True,
+        "query": query,
+        "naics": search_reference("naics", query),
+        "psc": search_reference("psc", query),
+        "setAsides": set_asides_for_status(status_text),
+        "allSetAsides": SET_ASIDES,
+        "savedCodes": store.saved_reference_codes(),
+        "profiles": saved_profiles,
+        "profileQuality": store.profile_quality(),
+        "feedback": store.search_feedback_summary(),
+    }
+
+
+def save_search_reference_code(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "code": store.save_reference_code(payload)}
+
+
+def delete_search_reference_code(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "code": store.delete_reference_code(payload)}
+
+
+def save_search_profile(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "profile": store.save_search_profile(payload)}
+
+
+def add_search_feedback(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "feedback": store.add_search_feedback(payload), "summary": store.search_feedback_summary()}
+
+
+def search_coach(settings: Settings, payload: dict) -> dict:
+    profile = load_business_profile(settings.profile_path)
+    text = str(payload.get("text") or "")
+    if not text:
+        parts = [profile.display_name]
+        parts.extend(getattr(profile, "capabilities", []) or [])
+        parts.extend(getattr(profile, "keywords", []) or [])
+        text = " ".join(str(part) for part in parts)
+    status_text: list[str] = list(getattr(profile, "set_asides", []) or [])
+    return {"ok": True, "mode": "deterministic", **suggest_profiles(text, status_text)}
+
 def manual_search(settings: Settings, criteria: dict) -> dict:
     if not settings.sam_gov_api_key:
         raise RuntimeError("SAM_GOV_API_KEY is required")
@@ -105,10 +157,22 @@ def manual_search(settings: Settings, criteria: dict) -> dict:
     days = max(1, min(int(criteria.get("days") or settings.search_days or 7), 60))
     posted_from = _manual_date(str(criteria.get("postedFrom") or ""), today - dt.timedelta(days=days))
     posted_to = _manual_date(str(criteria.get("postedTo") or ""), today)
+    profile_name = str(criteria.get("profileName") or "").strip()
+    if profile_name:
+        saved_profile = store.saved_search_profile(profile_name)
+        if saved_profile:
+            criteria = {**saved_profile, **{k: v for k, v in criteria.items() if v not in (None, "", [])}}
     params = {"api_key": settings.sam_gov_api_key, "postedFrom": posted_from, "postedTo": posted_to, "limit": str(max(1, min(int(criteria.get("limit") or 25), 100)))}
     field_map = {"keyword": "title", "naics": "ncode", "psc": "ccode", "ptype": "ptype", "setAside": "typeOfSetAside"}
     for source, target in field_map.items():
-        value = str(criteria.get(source) or "").strip()
+        raw_value = criteria.get(source)
+        if raw_value in (None, ""):
+            alias = {"keyword": "keywords", "naics": "naics", "psc": "psc", "ptype": "noticeTypes", "setAside": "setAsides"}.get(source)
+            raw_value = criteria.get(alias) if alias else raw_value
+        if isinstance(raw_value, list):
+            value = ",".join(str(item).strip() for item in raw_value if str(item).strip())
+        else:
+            value = str(raw_value or "").strip()
         if value:
             params[target] = value
     if not any(params.get(key) for key in ["title", "ncode", "ccode", "ptype", "typeOfSetAside"]):

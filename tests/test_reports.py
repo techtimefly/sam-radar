@@ -145,6 +145,29 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="manual-description"' in html
     assert 'function refreshAfterManualTrack(msg)' in html
     assert 'descriptionPreviewHtml(opp)' in html
+    assert 'Search Intelligence Studio' in html
+    assert 'id="search-studio-view"' in html
+    assert 'id="manual-profile"' in html
+    assert 'id="manual-setaside"' in html
+    assert 'list="manual-naics-codes"' in html
+    assert 'id="manual-naics-codes"' in html
+    assert 'data-unsave-code' in html
+    assert "iconLabel('check','Saved')" in html
+    assert '/api/search-reference/delete' in html
+    assert 'manual-search-form' in html
+    assert 'manual-field-setaside' in html
+    assert 'id="manual-clear"' in html
+    assert 'Manual search fields cleared.' in html
+    assert '.manual-field-action{grid-column:span 1' in html
+    assert 'manual-search-head' in html
+    assert 'class="small-ghost"' in html
+    assert 'id="lookup-status"' in html
+    assert 'id="coach-status"' in html
+    assert 'Saving code...' in html
+    assert 'Draft profile saved.' in html
+    assert 'function renderSearchIntel(data)' in html
+    assert 'function loadSearchIntel' in html
+    assert '/api/search-coach' in html
     assert 'function descriptionHtml(opp)' in html
     assert 'The agency needs secure engineering support.' in html
     assert 'DESCRIPTION' in html

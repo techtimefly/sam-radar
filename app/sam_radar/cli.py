@@ -8,7 +8,17 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
 from .config import load_settings
-from .core import add_manual_opportunity, manual_search, refresh_report
+from .core import (
+    add_manual_opportunity,
+    add_search_feedback,
+    delete_search_reference_code,
+    manual_search,
+    refresh_report,
+    save_search_profile,
+    save_search_reference_code,
+    search_coach,
+    search_intelligence,
+)
 from .scheduler import Scheduler
 from .storage import Store
 
@@ -25,6 +35,11 @@ class RadarHandler(SimpleHTTPRequestHandler):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
             store = Store(self.settings.data_dir / "sam-radar.sqlite3")
             self._send_json(200, {"ok": True, "workflow": store.get_status(notice_id), "writesEnabled": bool(self.settings.app_write_token)})
+            return
+        if parsed.path == "/api/search-intelligence":
+            from urllib.parse import parse_qs
+            query = (parse_qs(parsed.query).get("q") or [""])[0]
+            self._send_json(200, search_intelligence(self.settings, query))
             return
         if self.path in {"/", ""}:
             self.path = "/reports/latest.html"
@@ -44,6 +59,36 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
                 payload = json.loads(body.decode("utf-8") or "{}")
                 self._send_json(200, manual_search(self.settings, payload))
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path in {"/api/search-reference/save", "/api/search-reference/delete", "/api/search-profiles/save", "/api/search-feedback", "/api/search-coach/save-profile"}:
+            if not self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; writes are disabled."})
+                return
+            if self.headers.get("X-SAM-RADAR-TOKEN") != self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "Invalid or missing APP_WRITE_TOKEN."})
+                return
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+                payload = json.loads(body.decode("utf-8") or "{}")
+                if parsed.path == "/api/search-reference/save":
+                    result = save_search_reference_code(self.settings, payload)
+                elif parsed.path == "/api/search-reference/delete":
+                    result = delete_search_reference_code(self.settings, payload)
+                elif parsed.path == "/api/search-feedback":
+                    result = add_search_feedback(self.settings, payload)
+                else:
+                    result = save_search_profile(self.settings, payload)
+                self._send_json(200, result)
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path == "/api/search-coach":
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+                payload = json.loads(body.decode("utf-8") or "{}")
+                self._send_json(200, search_coach(self.settings, payload))
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
