@@ -25,6 +25,7 @@ from .core import (
     delete_search_reference_code,
     export_proposal_artifact_markdown,
     manual_search,
+    notification_preview,
     parse_proposal_document,
     proposal_artifact_history,
     proposal_artifacts,
@@ -63,6 +64,16 @@ class RadarHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/proposals":
             self._send_json(200, proposal_list(self.settings))
+            return
+        if parsed.path == "/api/notifications/preview":
+            try:
+                from urllib.parse import parse_qs
+
+                query = parse_qs(parsed.query)
+                payload = {key: values[-1] for key, values in query.items() if values}
+                self._send_json(200, notification_preview(self.settings, payload))
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
             return
         if parsed.path == "/api/ai/settings":
             self._send_json(200, ai_settings(self.settings))
