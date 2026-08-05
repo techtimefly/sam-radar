@@ -57,6 +57,21 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "workflowDecisionReason": "Strong fit",
                 "workflowDocuments": [{"label": "PWS", "url": "https://example.test/pws.pdf", "reviewed": False}],
                 "workflowEvents": [{"type": "status_changed", "message": "Status changed", "createdAt": "2026-08-05T00:54:39+00:00"}],
+                "proposal": {
+                    "id": 1,
+                    "noticeId": "abc-123",
+                    "title": "Security Support",
+                    "role": "prime",
+                    "stage": "docs",
+                    "stageLabel": "Docs",
+                    "status": "active",
+                    "nextAction": "Download attachments",
+                    "stages": [
+                        {"key": "intent", "label": "Intent", "state": "complete"},
+                        {"key": "intake", "label": "Intake", "state": "complete"},
+                        {"key": "docs", "label": "Docs", "state": "current"},
+                    ],
+                },
                 "descriptionUrl": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=abc-123",
                 "descriptionParagraphs": ["The agency needs secure engineering support.", "Work includes training and compliance automation."],
                 "descriptionStatus": "available",
@@ -76,6 +91,16 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'samRadarWriteToken' in html
     assert 'data-view="board"' in html
     assert 'data-view="queue"' in html
+    assert 'data-view="proposals"' in html
+    assert 'id="proposals-view"' in html
+    assert 'id="proposal-list"' in html
+    assert 'class="proposal-create"' in html
+    assert 'class="proposal-slot"' in html
+    assert '/api/proposals/create' in html
+    assert '/api/proposals/stage' in html
+    assert 'function proposalPanelHtml' in html
+    assert 'function renderProposals' in html
+    assert 'Proposal: Docs' in html
     assert 'id="detail-modal"' in html
     assert 'name="decisionReason"' in html
     assert 'class="documents"' in html
