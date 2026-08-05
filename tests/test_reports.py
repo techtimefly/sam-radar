@@ -158,7 +158,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'manual-field-setaside' in html
     assert 'id="manual-clear"' in html
     assert 'Manual search fields cleared.' in html
-    assert '.manual-field-action{grid-column:span 2' in html
+    assert '.manual-field-action{grid-column:span 1' in html
+    assert 'manual-search-head' in html
+    assert 'class="small-ghost"' in html
     assert 'id="lookup-status"' in html
     assert 'id="coach-status"' in html
     assert 'Saving code...' in html
