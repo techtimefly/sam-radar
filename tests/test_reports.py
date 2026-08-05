@@ -78,9 +78,14 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="documents"' in html
     assert 'class="timeline"' in html
     assert 'max-width:min(1760px,calc(100vw - 48px))' in html
-    assert 'class="tool-group view-group"' in html
+    assert 'class="tab-row"' in html
+    assert 'class="command-row"' in html
+    assert 'class="tool-group view-group" role="tablist" aria-label="Report views"' in html
     assert 'class="tool-group filter-group"' in html
     assert 'class="tool-group action-group"' in html
+    assert 'data-view="executive" role="tab"' in html
+    assert 'id="executive-view" class="view active"' in html
+    assert 'id="list-view" class="view active"' not in html
     assert 'width:min(1320px,calc(100vw - 40px))' in html
     assert 'overflow-wrap:anywhere;overflow-x:hidden' in html
     assert '.detail-fit a{overflow-wrap:anywhere;word-break:break-word}' in html
@@ -118,6 +123,9 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'id="manual-detail-modal"' in html
     assert 'class="manual-detail"' in html
     assert 'class="manual-detail-track refresh"' in html
+    assert 'class="close-modal modal-close" type="button" aria-label="Close"' in html
+    assert 'class="close-manual-modal modal-close" type="button" aria-label="Close"' in html
+    assert '.modal-close{width:40px;height:40px;min-width:40px;padding:0' in html
     assert '<option value="7" selected>7 days</option>' in html
     assert '<option value="25" selected>25</option>' in html
     assert ".lane-grid label,.lane-empty{display:grid;grid-template-columns:18px 1fr" in html
