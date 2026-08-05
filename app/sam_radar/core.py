@@ -341,6 +341,24 @@ def proposal_documents(settings: Settings, notice_id: str) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     return {"ok": True, "documents": store.proposal_documents(notice_id), "evidence": store.evidence_snippets(notice_id)}
 
+
+def proposal_artifacts(settings: Settings, notice_id: str) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "artifacts": store.proposal_artifacts(notice_id)}
+
+
+def add_proposal_artifact(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    artifact = store.add_proposal_artifact(payload)
+    return {"ok": True, "artifact": artifact, "artifacts": store.proposal_artifacts(artifact["noticeId"])}
+
+
+def update_proposal_artifact(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    artifact_id = int(payload.get("artifactId") or payload.get("id") or 0)
+    artifact = store.update_proposal_artifact(artifact_id, payload)
+    return {"ok": True, "artifact": artifact, "artifacts": store.proposal_artifacts(artifact["noticeId"])}
+
 def refresh_report(
     settings: Settings,
     *,
@@ -382,6 +400,7 @@ def refresh_report(
     status_map = store.status_map(notice_ids)
     proposal_map = store.proposal_map(notice_ids)
     proposal_documents_map = store.proposal_document_map(notice_ids)
+    proposal_artifact_map = store.proposal_artifact_map(notice_ids)
     for match in matches:
         notice_id = str(match.get("noticeId") or "")
         workflow = status_map.get(notice_id) or store.get_status(notice_id)
@@ -400,6 +419,7 @@ def refresh_report(
         match["proposal"] = proposal_map.get(notice_id) or {}
         match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
+        match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
     unseen = store.unseen(matches)
     report = build_report_payload(payload, profile, settings, unseen=unseen)
     paths = write_reports(report, settings)

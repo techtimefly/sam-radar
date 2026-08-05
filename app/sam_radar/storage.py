@@ -48,6 +48,9 @@ PROPOSAL_STAGE_LABELS = {
 }
 DOCUMENT_SOURCE_TYPES = {"url", "local-path", "upload"}
 DOCUMENT_PARSE_STATUSES = {"pending", "parsed", "failed", "unsupported"}
+ARTIFACT_TYPES = {"outline", "prime-proposal", "subcontractor", "compliance-matrix", "forms-checklist", "questions", "notes"}
+ARTIFACT_STATUSES = {"draft", "review", "approved", "archived"}
+ARTIFACT_FORMATS = {"markdown", "text"}
 
 
 def proposal_stage_items(current_stage: str) -> list[dict[str, str]]:
@@ -296,6 +299,29 @@ class Store:
                 """
                 CREATE INDEX IF NOT EXISTS idx_evidence_snippets_notice
                 ON evidence_snippets (notice_id, document_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_artifacts (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  artifact_type TEXT NOT NULL DEFAULT 'outline',
+                  title TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL DEFAULT 'draft',
+                  format TEXT NOT NULL DEFAULT 'markdown',
+                  content TEXT NOT NULL DEFAULT '',
+                  notes TEXT NOT NULL DEFAULT '',
+                  version INTEGER NOT NULL DEFAULT 1,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_proposal_artifacts_notice
+                ON proposal_artifacts (notice_id, updated_at DESC)
                 """
             )
             conn.execute(
@@ -1229,6 +1255,119 @@ class Store:
                 (notice_id,),
             ).fetchone()
         return self._proposal_from_row(row)
+
+    def _proposal_artifact_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "artifactType": row["artifact_type"],
+            "title": row["title"],
+            "status": row["status"],
+            "format": row["format"],
+            "content": row["content"],
+            "notes": row["notes"],
+            "version": row["version"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def add_proposal_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(payload.get("noticeId"), 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        artifact_type = clean_text(payload.get("artifactType") or payload.get("artifact_type") or "outline", 60).lower()
+        if artifact_type not in ARTIFACT_TYPES:
+            raise ValueError(f"artifactType must be one of: {', '.join(sorted(ARTIFACT_TYPES))}")
+        status = clean_text(payload.get("status") or "draft", 40).lower()
+        if status not in ARTIFACT_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(sorted(ARTIFACT_STATUSES))}")
+        fmt = clean_text(payload.get("format") or "markdown", 40).lower()
+        if fmt not in ARTIFACT_FORMATS:
+            raise ValueError(f"format must be one of: {', '.join(sorted(ARTIFACT_FORMATS))}")
+        title = clean_text(payload.get("title"), 300) or artifact_type.replace("-", " ").title()
+        now = utc_now()
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO proposal_artifacts
+                  (notice_id, artifact_type, title, status, format, content, notes, version, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    notice_id,
+                    artifact_type,
+                    title,
+                    status,
+                    fmt,
+                    clean_text(payload.get("content"), 20000),
+                    clean_text(payload.get("notes"), 5000),
+                    now,
+                    now,
+                ),
+            )
+            self._add_event(conn, notice_id, "proposal_artifact_created", "", title, "Proposal artifact created", now)
+            row = conn.execute("SELECT * FROM proposal_artifacts WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return self._proposal_artifact_from_row(row)
+
+    def update_proposal_artifact(self, artifact_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        if not artifact_id:
+            raise ValueError("artifactId is required")
+        now = utc_now()
+        with self.connect() as conn:
+            existing = conn.execute("SELECT * FROM proposal_artifacts WHERE id = ?", (artifact_id,)).fetchone()
+            if not existing:
+                raise ValueError("artifact does not exist")
+            artifact_type = clean_text(payload.get("artifactType") or existing["artifact_type"], 60).lower()
+            if artifact_type not in ARTIFACT_TYPES:
+                raise ValueError(f"artifactType must be one of: {', '.join(sorted(ARTIFACT_TYPES))}")
+            status = clean_text(payload.get("status") or existing["status"], 40).lower()
+            if status not in ARTIFACT_STATUSES:
+                raise ValueError(f"status must be one of: {', '.join(sorted(ARTIFACT_STATUSES))}")
+            fmt = clean_text(payload.get("format") or existing["format"], 40).lower()
+            if fmt not in ARTIFACT_FORMATS:
+                raise ValueError(f"format must be one of: {', '.join(sorted(ARTIFACT_FORMATS))}")
+            content = clean_text(payload.get("content"), 20000) if "content" in payload else existing["content"]
+            notes = clean_text(payload.get("notes"), 5000) if "notes" in payload else existing["notes"]
+            title = clean_text(payload.get("title"), 300) if "title" in payload else existing["title"]
+            changed = any(
+                str(existing[key] or "") != str(value or "")
+                for key, value in (("artifact_type", artifact_type), ("status", status), ("format", fmt), ("content", content), ("notes", notes), ("title", title))
+            )
+            version = int(existing["version"] or 1) + (1 if changed else 0)
+            conn.execute(
+                """
+                UPDATE proposal_artifacts
+                SET artifact_type = ?, title = ?, status = ?, format = ?, content = ?, notes = ?, version = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (artifact_type, title, status, fmt, content, notes, version, now, artifact_id),
+            )
+            if changed:
+                self._add_event(conn, existing["notice_id"], "proposal_artifact_updated", str(existing["version"]), str(version), "Proposal artifact updated", now)
+            row = conn.execute("SELECT * FROM proposal_artifacts WHERE id = ?", (artifact_id,)).fetchone()
+        return self._proposal_artifact_from_row(row)
+
+    def proposal_artifacts(self, notice_id: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM proposal_artifacts"
+        params: tuple[Any, ...] = ()
+        if notice_id:
+            sql += " WHERE notice_id = ?"
+            params = (notice_id,)
+        sql += " ORDER BY datetime(updated_at) DESC, id DESC"
+        with self.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._proposal_artifact_from_row(row) for row in rows]
+
+    def proposal_artifact_map(self, notice_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        if not notice_ids:
+            return {}
+        placeholders = ",".join("?" for _ in notice_ids)
+        with self.connect() as conn:
+            rows = conn.execute(f"SELECT * FROM proposal_artifacts WHERE notice_id IN ({placeholders}) ORDER BY id", notice_ids).fetchall()
+        mapped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            mapped.setdefault(row["notice_id"], []).append(self._proposal_artifact_from_row(row))
+        return mapped
 
     def manual_tracked_opportunities(self) -> list[dict[str, Any]]:
         with self.connect() as conn:

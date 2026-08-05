@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 from .config import load_settings
 from .core import (
     add_manual_opportunity,
+    add_proposal_artifact,
     add_proposal_document,
     add_search_feedback,
     ai_audit_log,
@@ -22,6 +23,7 @@ from .core import (
     delete_search_reference_code,
     manual_search,
     parse_proposal_document,
+    proposal_artifacts,
     proposal_documents,
     proposal_list,
     refresh_report,
@@ -31,6 +33,7 @@ from .core import (
     search_coach,
     search_intelligence,
     update_proposal,
+    update_proposal_artifact,
 )
 from .scheduler import Scheduler
 from .storage import Store
@@ -72,6 +75,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/proposal-documents/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self._send_json(200, proposal_documents(self.settings, notice_id))
+            return
+        if parsed.path.startswith("/api/proposal-artifacts/"):
+            notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self._send_json(200, proposal_artifacts(self.settings, notice_id))
             return
         if self.path in {"/", ""}:
             self.path = "/reports/latest.html"
@@ -152,6 +159,8 @@ class RadarHandler(SimpleHTTPRequestHandler):
             "/api/proposal-documents/add",
             "/api/proposal-documents/parse",
             "/api/proposal-documents/remove",
+            "/api/proposal-artifacts/add",
+            "/api/proposal-artifacts/update",
         }:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; proposal writes are disabled."})
@@ -170,6 +179,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = add_proposal_document(self.settings, payload)
                 elif parsed.path == "/api/proposal-documents/remove":
                     result = remove_proposal_document(self.settings, payload)
+                elif parsed.path == "/api/proposal-artifacts/add":
+                    result = add_proposal_artifact(self.settings, payload)
+                elif parsed.path == "/api/proposal-artifacts/update":
+                    result = update_proposal_artifact(self.settings, payload)
                 else:
                     result = parse_proposal_document(self.settings, payload)
                 self._send_json(200, result)

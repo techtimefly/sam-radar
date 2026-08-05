@@ -198,6 +198,60 @@ def test_proposal_document_registry_and_evidence_snippets(tmp_path: Path):
     assert "proposal_document_parsed" in event_types
 
 
+def test_proposal_artifact_registry_updates_versions_and_events(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    artifact = store.add_proposal_artifact(
+        {
+            "noticeId": "opp-artifact-1",
+            "artifactType": "outline",
+            "title": "Initial Outline",
+            "content": "# Outline",
+            "notes": "First capture draft.",
+        }
+    )
+
+    assert artifact["noticeId"] == "opp-artifact-1"
+    assert artifact["artifactType"] == "outline"
+    assert artifact["status"] == "draft"
+    assert artifact["format"] == "markdown"
+    assert artifact["version"] == 1
+
+    updated = store.update_proposal_artifact(
+        artifact["id"],
+        {"status": "review", "content": "# Updated Outline", "notes": "Ready for review."},
+    )
+
+    assert updated["status"] == "review"
+    assert updated["content"] == "# Updated Outline"
+    assert updated["version"] == 2
+    assert store.proposal_artifacts("opp-artifact-1")[0]["id"] == artifact["id"]
+    assert store.proposal_artifact_map(["opp-artifact-1"])["opp-artifact-1"][0]["status"] == "review"
+
+    event_types = [event["type"] for event in store.get_status("opp-artifact-1")["events"]]
+    assert "proposal_artifact_created" in event_types
+    assert "proposal_artifact_updated" in event_types
+
+
+def test_proposal_artifact_validation_rejects_bad_values(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    try:
+        store.add_proposal_artifact({"noticeId": "opp-artifact-2", "artifactType": "mystery"})
+    except ValueError as exc:
+        assert "artifactType must be one of" in str(exc)
+    else:
+        raise AssertionError("Expected invalid artifact type to raise ValueError")
+
+    artifact = store.add_proposal_artifact({"noticeId": "opp-artifact-2", "artifactType": "notes"})
+    try:
+        store.update_proposal_artifact(artifact["id"], {"status": "stuck"})
+    except ValueError as exc:
+        assert "status must be one of" in str(exc)
+    else:
+        raise AssertionError("Expected invalid artifact status to raise ValueError")
+
+
 def test_ai_audit_events_store_metadata_without_prompt_text(tmp_path: Path):
     store = Store(tmp_path / "sam-radar.sqlite3")
 

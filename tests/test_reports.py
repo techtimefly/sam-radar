@@ -74,6 +74,20 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "evidenceSnippets": [
                     {"id": 3, "documentId": 7, "section": "Requirements", "snippet": "Offeror must provide secure engineering support."}
                 ],
+                "proposalArtifacts": [
+                    {
+                        "id": 5,
+                        "noticeId": "abc-123",
+                        "artifactType": "outline",
+                        "title": "Initial Outline",
+                        "status": "draft",
+                        "format": "markdown",
+                        "content": "# Initial Outline",
+                        "notes": "Use parsed requirements.",
+                        "version": 1,
+                        "updatedAt": "2026-08-05T01:00:00+00:00",
+                    }
+                ],
                 "proposal": {
                     "id": 1,
                     "noticeId": "abc-123",
@@ -155,6 +169,14 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '/api/proposal-documents/parse' in html
     assert '/api/proposal-documents/remove' in html
     assert '/api/proposal-documents/' in html
+    assert 'Artifact Drafts' in html
+    assert 'Initial Outline' in html
+    assert 'class="proposal-artifacts"' in html
+    assert 'function proposalArtifactsHtml' in html
+    assert 'function wireArtifacts' in html
+    assert '/api/proposal-artifacts/add' in html
+    assert '/api/proposal-artifacts/update' in html
+    assert '/api/proposal-artifacts/' in html
     assert 'Offeror must provide secure engineering support.' in html
     assert 'id="proposal-workspace"' in html
     assert 'class="readiness"' in html
