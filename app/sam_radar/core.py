@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import re
 from pathlib import Path
 
 from .ai_assist import (
@@ -354,6 +355,34 @@ def remove_proposal_document(settings: Settings, payload: dict) -> dict:
 def proposal_documents(settings: Settings, notice_id: str) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     return {"ok": True, "documents": store.proposal_documents(notice_id), "evidence": store.evidence_snippets(notice_id)}
+
+
+def _markdown_filename(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", value or "proposal-artifact").strip(".-")
+    return (name[:120] or "proposal-artifact") + ".md"
+
+
+def export_proposal_artifact_markdown(settings: Settings, artifact_id: int) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    artifact = store.proposal_artifact(artifact_id)
+    if not artifact:
+        raise ValueError("artifact does not exist")
+    title = artifact.get("title") or "Proposal Artifact"
+    body = str(artifact.get("content") or "").strip()
+    metadata = [
+        f"# {title}",
+        "",
+        f"- Notice ID: {artifact.get('noticeId') or ''}",
+        f"- Type: {artifact.get('artifactType') or ''}",
+        f"- Status: {artifact.get('status') or ''}",
+        f"- Version: {artifact.get('version') or 1}",
+        f"- Updated: {artifact.get('updatedAt') or ''}",
+    ]
+    notes = str(artifact.get("notes") or "").strip()
+    if notes:
+        metadata.extend([f"- Notes: {notes}"])
+    metadata.extend(["", "---", "", body or "_No artifact content yet._", ""])
+    return {"ok": True, "filename": _markdown_filename(str(title)), "content": "\n".join(metadata), "artifact": artifact}
 
 
 def proposal_artifacts(settings: Settings, notice_id: str) -> dict:

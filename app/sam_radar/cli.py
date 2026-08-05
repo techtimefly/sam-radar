@@ -23,6 +23,7 @@ from .core import (
     ai_subcontractor_templates,
     create_proposal,
     delete_search_reference_code,
+    export_proposal_artifact_markdown,
     manual_search,
     parse_proposal_document,
     proposal_artifact_history,
@@ -78,6 +79,20 @@ class RadarHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/proposal-documents/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self._send_json(200, proposal_documents(self.settings, notice_id))
+            return
+        if parsed.path.startswith("/api/proposal-artifact-export/"):
+            artifact_id = int(unquote(parsed.path.rsplit("/", 1)[-1]) or 0)
+            try:
+                export = export_proposal_artifact_markdown(self.settings, artifact_id)
+                data = export["content"].encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Disposition", f"attachment; filename=\"{export['filename']}\"")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(404, {"ok": False, "error": str(exc)})
             return
         if parsed.path.startswith("/api/proposal-artifact-history/"):
             artifact_id = int(unquote(parsed.path.rsplit("/", 1)[-1]) or 0)

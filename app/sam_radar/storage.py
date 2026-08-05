@@ -1410,6 +1410,14 @@ class Store:
                 self._add_event(conn, existing["notice_id"], "proposal_artifact_updated", str(existing["version"]), str(version), "Proposal artifact updated", now)
         return self._proposal_artifact_from_row(row)
 
+
+    def proposal_artifact(self, artifact_id: int) -> dict[str, Any] | None:
+        if not artifact_id:
+            raise ValueError("artifactId is required")
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM proposal_artifacts WHERE id = ?", (artifact_id,)).fetchone()
+        return self._proposal_artifact_from_row(row) if row else None
+
     def proposal_artifacts(self, notice_id: str | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM proposal_artifacts"
         params: tuple[Any, ...] = ()
