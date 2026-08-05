@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import subprocess
+import urllib.error
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,18 +41,16 @@ def build_queries(api_key: str, profile: BusinessProfile, window: SearchWindow, 
 
 def fetch_json(params: dict[str, str], timeout: int = 8) -> dict[str, Any]:
     url = BASE_URL + "?" + urllib.parse.urlencode(params)
-    cmd = [
-        "curl",
-        "-fsS",
-        "--connect-timeout",
-        str(max(2, min(timeout, 10))),
-        "--max-time",
-        str(max(3, timeout)),
-        "-H",
-        "Accept: application/json",
-        "-H",
-        "User-Agent: sam-radar/0.1",
+    request = urllib.request.Request(
         url,
-    ]
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout + 3)
-    return json.loads(result.stdout)
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "sam-radar/0.1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:240]
+        raise RuntimeError(f"SAM.gov API HTTP {exc.code}: {body}") from exc

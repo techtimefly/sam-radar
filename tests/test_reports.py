@@ -64,4 +64,7 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '/api/status/' in html
     assert 'X-SAM-RADAR-TOKEN' in html
     assert 'samRadarWriteToken' in html
+    assert 'data-view="board"' in html
+    assert 'id="theme-button"' in html
+    assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
     assert 'Updated: Aug 4, 2026 6:54 PM MDT' in html

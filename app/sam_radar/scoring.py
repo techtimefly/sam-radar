@@ -170,8 +170,9 @@ def search_opportunities(
         except Exception as exc:  # noqa: BLE001
             return redacted, None, f"{type(exc).__name__}: {exc}"
 
-    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
-        future_map = {executor.submit(run_query, params): params for params in queries}
+    executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
+    future_map = {executor.submit(run_query, params): params for params in queries}
+    try:
         try:
             for future in as_completed(future_map, timeout=global_timeout):
                 redacted, payload, error = future.result()
@@ -210,6 +211,8 @@ def search_opportunities(
             errors.append(f"Global timeout after {global_timeout}s; returned partial results")
             for future in future_map:
                 future.cancel()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     matches.sort(key=lambda item: item["score"], reverse=True)
     return {"postedFrom": window.posted_from, "postedTo": window.posted_to, "matches": matches[:max_results], "errors": errors}

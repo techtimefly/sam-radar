@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
@@ -93,6 +94,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="sam-radar")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve")
+    sub.add_parser("generate-token")
     refresh_parser = sub.add_parser("refresh")
     refresh_parser.add_argument("--mark-seen", action="store_true")
     refresh_parser.add_argument("--notify", action="store_true")
@@ -103,6 +105,9 @@ def main() -> int:
     if args.command == "refresh":
         payload = refresh_report(load_settings(), mark_seen=args.mark_seen, notify=args.notify, notify_no_matches=args.notify_no_matches)
         print(json.dumps(payload, indent=2))
+        return 0
+    if args.command == "generate-token":
+        print(secrets.token_urlsafe(32))
         return 0
     return 2
 

@@ -69,6 +69,7 @@ APP_BASE_URL=http://localhost:8066
 SAM_RADAR_HOST=0.0.0.0
 SAM_RADAR_PORT=8066
 TIMEZONE=America/Denver
+# Generate with: sam-radar generate-token
 APP_WRITE_TOKEN=
 BUSINESS_PROFILE=config/business.yaml
 DATA_DIR=data
@@ -117,7 +118,7 @@ server {
 
 The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`.
 
-Status and notes writes require `APP_WRITE_TOKEN`. The browser prompts for this token the first time you save a status and stores it in local storage. Leave `APP_WRITE_TOKEN` blank to disable browser writes.
+Status and notes writes require `APP_WRITE_TOKEN`. Generate one with `sam-radar generate-token` or `scripts/generate-token.sh`, save it in `.env`, then use the dashboard Unlock control to store it in your browser. This is separate from your SAM.gov API key. Leave `APP_WRITE_TOKEN` blank to disable browser writes.
 
 ## Notifications And Scheduler
 
@@ -154,7 +155,7 @@ sam-radar serve
 
 - v0.1: public Docker MVP with configurable search and report dashboard
 - v0.2: scheduler, Slack, Telegram, and richer persistence
-- v0.3: bid/no-bid statuses, notes, watchlist, and CSV export
+- v0.3: board view, bid/no-bid statuses, notes, watchlist, and CSV export
 - v1.0: stable self-hosted release
 
 ## Security Notes
