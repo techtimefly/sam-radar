@@ -453,6 +453,33 @@ class Store:
         return workflow
 
 
+    def manual_tracked_opportunities(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT notice_id, title, url, source, payload_json, added_at
+                FROM manual_tracked_opportunities
+                ORDER BY added_at DESC
+                """
+            ).fetchall()
+        opportunities: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload.setdefault("noticeId", row["notice_id"])
+            payload.setdefault("title", row["title"])
+            payload.setdefault("url", row["url"])
+            payload.setdefault("uiLink", row["url"])
+            payload["manualTracked"] = True
+            payload["manualTrackedAt"] = row["added_at"]
+            payload["source"] = row["source"]
+            opportunities.append(payload)
+        return opportunities
+
     def tracked_notice_ids(self) -> set[str]:
         with self.connect() as conn:
             ids = {row["notice_id"] for row in conn.execute("SELECT notice_id FROM opportunity_status")}

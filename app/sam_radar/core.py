@@ -172,6 +172,16 @@ def refresh_report(
         max_results=settings.report_limit,
     )
     matches = payload.get("matches") or []
+    match_ids = {str(match.get("noticeId") or "") for match in matches}
+    manual_matches = [
+        opp
+        for opp in store.manual_tracked_opportunities()
+        if str(opp.get("noticeId") or "") not in match_ids
+    ]
+    if manual_matches:
+        matches.extend(manual_matches)
+        payload["matches"] = matches
+        payload["totalMatches"] = len(matches)
     description_errors = enrich_descriptions(
         matches,
         api_key=settings.sam_gov_api_key,

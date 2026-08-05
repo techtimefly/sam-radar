@@ -93,3 +93,20 @@ def test_manual_tracked_opportunity_prevents_duplicate_adds_without_marking_seen
         assert "already tracked" in str(exc)
     else:
         raise AssertionError("Expected duplicate manual opportunity to be rejected")
+
+
+def test_manual_tracked_opportunities_returns_saved_payloads(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    opp = {
+        "noticeId": "manual-2",
+        "title": "Manual Opportunity",
+        "url": "https://sam.gov/opp/manual-2/view",
+        "descriptionParagraphs": ["Fetched description text."],
+    }
+
+    store.add_manual_tracked(opp)
+
+    saved = store.manual_tracked_opportunities()
+    assert saved[0]["noticeId"] == "manual-2"
+    assert saved[0]["manualTracked"] is True
+    assert saved[0]["descriptionParagraphs"] == ["Fetched description text."]

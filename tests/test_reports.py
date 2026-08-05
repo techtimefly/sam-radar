@@ -142,9 +142,13 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="description-preview"' in html
     assert 'class="detail-description"' in html
     assert 'class="manual-detail-description"' in html
+    assert 'class="manual-description"' in html
+    assert 'function refreshAfterManualTrack(msg)' in html
+    assert 'descriptionPreviewHtml(opp)' in html
     assert 'function descriptionHtml(opp)' in html
     assert 'The agency needs secure engineering support.' in html
-    assert 'SAM.gov Description' in html
+    assert 'DESCRIPTION' in html
+    assert 'SAM.gov Description' not in html
     assert 'id="theme-button"' in html
     assert 'id="theme-button" class="theme-toggle"' in html
     assert ".theme-toggle{min-width:92px;white-space:nowrap}" in html
