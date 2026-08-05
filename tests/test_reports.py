@@ -149,6 +149,12 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'id="search-studio-view"' in html
     assert 'id="manual-profile"' in html
     assert 'id="manual-setaside"' in html
+    assert 'manual-search-form' in html
+    assert 'manual-field-setaside' in html
+    assert 'id="lookup-status"' in html
+    assert 'id="coach-status"' in html
+    assert 'Saving code...' in html
+    assert 'Draft profile saved.' in html
     assert 'function renderSearchIntel(data)' in html
     assert 'function loadSearchIntel' in html
     assert '/api/search-coach' in html
