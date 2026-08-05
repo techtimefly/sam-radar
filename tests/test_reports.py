@@ -98,6 +98,12 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert "const statusOrder=['new','reviewing','pursue','teaming','submitted','monitor','no-bid','archived']" in html
     assert 'grid-template-columns:repeat(var(--lane-count,8),minmax(210px,1fr))' in html
     assert '.back-to-top.visible' in html
+    assert 'class="lane-head"' in html
+    assert 'class="lane-cards"' in html
+    assert '.lane{min-height:360px;padding:10px;display:grid;grid-template-rows:auto 1fr' in html
+    assert '.lane-head{position:relative;z-index:1' in html
+    assert '.lane-head{position:sticky' not in html
+    assert '.lane-cards{display:grid;align-content:start;gap:8px;min-width:0}' in html
     assert '.toolbar{position:static}' not in html
     assert 'id="theme-button"' in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
