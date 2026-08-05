@@ -111,6 +111,11 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '.lane-cards{display:grid;align-content:start;gap:8px;min-width:0}' in html
     assert '.toolbar{position:static}' not in html
     assert 'id="theme-button"' in html
+    assert 'id="theme-button" class="theme-toggle"' in html
+    assert ".theme-toggle{min-width:92px;white-space:nowrap}" in html
+    assert "laneButton?.addEventListener('click',event=>{event.stopPropagation()" in html
+    assert "!laneButton?.contains(event.target)" in html
+    assert "!tokenButton.contains(event.target)" in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
     assert 'class="icon-sprite"' in html
     assert 'id="icon-refresh"' in html
