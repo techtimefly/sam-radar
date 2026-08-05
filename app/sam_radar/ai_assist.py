@@ -310,6 +310,89 @@ def deterministic_prime_templates(opp: dict[str, Any], evidence: list[dict[str, 
     ]
 
 
+def deterministic_subcontractor_templates(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> list[dict[str, str]]:
+    title = str(opp.get("title") or "Opportunity").strip()
+    agency = str(opp.get("organization") or "Agency not listed").strip()
+    deadline = str(opp.get("dueDisplay") or opp.get("responseDeadline") or "n/a").strip()
+    fit = str(opp.get("fitReason") or "Review the fit rationale and source documents.").strip()
+    requirements = deterministic_requirements(opp, evidence)
+    gaps = deterministic_gap_analysis({**opp, "proposal": {"id": 1, "role": "subcontractor"}}, evidence)
+    req_bullets = _bullet_lines(requirements.get("requirements") or [], "Confirm which scope elements are realistic for a subcontractor role.")
+    eval_bullets = _bullet_lines(requirements.get("evaluationCriteria") or [], "Ask the prime how evaluation factors map to subcontractor inputs.")
+    submission_bullets = _bullet_lines(requirements.get("submissionInstructions") or [], "Confirm prime-required internal due dates and format.")
+    evidence_bullets = _bullet_lines(evidence[:8], "Parse source documents to attach supporting evidence.")
+    question_lines = "\n".join(
+        f"- {item['title']}: {item['action']}" for item in gaps.get("gaps", [])[:8]
+    ) or "- Confirm workshare, pricing model, and required partner inputs with the prime."
+    matrix_rows = "\n".join(
+        f"| {row['category']} | {row['text']} | Prime/TBD | Sub/TBD | Open |" for row in _requirement_rows(requirements)
+    ) or "| Requirement | Confirm requirements from solicitation package. | Prime/TBD | Sub/TBD | Open |"
+    return [
+        {
+            "artifactType": "subcontractor",
+            "title": "Subcontractor Capability Response Template",
+            "notes": "Generated deterministic subcontractor template; tailor for the target prime.",
+            "content": f"""# Subcontractor Capability Response Template\n\n## Opportunity\n- Title: {title}\n- Agency: {agency}\n- Response deadline: {deadline}\n- Initial fit: {fit}\n\n## Partner Positioning\nDescribe the specific workshare, niche technical value, and low-friction teaming model offered to the prime.\n\n## Relevant Capabilities\n{req_bullets}\n\n## Security / Compliance Support\nSummarize certifications, controls, tooling, secure delivery practices, and documentation the prime can reuse.\n\n## Past Performance Inputs\nList relevant project summaries, roles performed, outcomes, and references the prime may cite.\n\n## Evaluation Support\n{eval_bullets}\n\n## Prime Input Needed\n{submission_bullets}\n\n## Evidence To Attach\n{evidence_bullets}\n""",
+        },
+        {
+            "artifactType": "compliance-matrix",
+            "title": "Subcontractor Responsibility Matrix",
+            "notes": "Use with a prime to clarify ownership and handoffs.",
+            "content": f"""# Subcontractor Responsibility Matrix\n\n| Category | Requirement | Prime Owner | Subcontractor Owner | Status |\n| --- | --- | --- | --- | --- |\n{matrix_rows}\n""",
+        },
+        {
+            "artifactType": "forms-checklist",
+            "title": "Subcontractor Partner Checklist",
+            "notes": "Track documents and inputs commonly requested by primes.",
+            "content": """# Subcontractor Partner Checklist\n\n## Prime-Facing Materials\n- Capability statement\n- Socio-economic certification summary\n- NAICS/PSC fit notes\n- Past performance summaries\n- Security/compliance proof points\n- Labor categories or rate assumptions\n- Conflict of interest check\n\n## Internal Readiness\n- Confirm desired workshare\n- Confirm pricing constraints\n- Confirm subcontract terms review owner\n- Confirm response due date to prime\n""",
+        },
+        {
+            "artifactType": "questions",
+            "title": "Subcontractor Teaming Questions",
+            "notes": "Questions for prime outreach and teaming qualification.",
+            "content": f"""# Subcontractor Teaming Questions\n\n## Questions For Prime / Capture Lead\n{question_lines}\n\n## Partner Fit Checks\n- What scope does the prime want covered by a subcontractor?\n- What evidence or past performance format does the prime need?\n- What pricing detail is required before proposal submission?\n- Who owns final compliance matrix updates?\n""",
+        },
+    ]
+
+
+def generate_subcontractor_proposal_templates(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    notice_id = str(payload.get("noticeId") or "")
+    if not notice_id:
+        raise ValueError("noticeId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    opp = _latest_match(settings, notice_id)
+    if not opp:
+        raise ValueError("Opportunity not found in latest report")
+    proposal = store.proposal_map([notice_id]).get(notice_id) or {}
+    if proposal and proposal.get("role") != "subcontractor":
+        raise ValueError("Subcontractor templates require a subcontractor proposal workspace")
+    if not proposal:
+        proposal = store.create_proposal(notice_id, {"noticeId": notice_id, "title": opp.get("title") or notice_id, "role": "subcontractor"})
+    evidence = store.evidence_snippets(notice_id)
+    generated: list[dict[str, Any]] = []
+    existing = store.proposal_artifacts(notice_id)
+    by_title = {str(item.get("title") or ""): item for item in existing}
+    for template in deterministic_subcontractor_templates({**opp, "proposal": proposal}, evidence):
+        artifact_payload = {"noticeId": notice_id, "status": "draft", "format": "markdown", **template}
+        current = by_title.get(template["title"])
+        if current:
+            generated.append(store.update_proposal_artifact(int(current["id"]), artifact_payload))
+        else:
+            generated.append(store.add_proposal_artifact(artifact_payload))
+    ai = settings_summary(settings)
+    _record_ai_audit(
+        settings,
+        notice_id=notice_id,
+        action="subcontractor_templates",
+        mode="deterministic",
+        provider=ai["provider"],
+        model=str(ai.get("model") or ""),
+        result="success",
+        message=f"Generated {len(generated)} subcontractor proposal artifact templates.",
+    )
+    return {"ok": True, "mode": "deterministic", "proposal": proposal, "generated": generated, "artifacts": store.proposal_artifacts(notice_id)}
+
+
 def generate_prime_proposal_templates(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
     notice_id = str(payload.get("noticeId") or "")
     if not notice_id:
