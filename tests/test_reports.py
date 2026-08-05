@@ -107,6 +107,14 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '.toolbar{position:static}' not in html
     assert 'id="theme-button"' in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
+    assert 'class="icon-sprite"' in html
+    assert 'id="icon-refresh"' in html
+    assert 'id="icon-archive"' in html
+    assert "--text-lg:16px" in html
+    assert "font-variant-numeric:tabular-nums" in html
+    assert 'class="icon" aria-hidden="true"><use href="#icon-refresh"' in html
+    assert 'class="icon" aria-hidden="true"><use href="#icon-kanban"' in html
+    assert 'class="icon" aria-hidden="true"><use href="#icon-external"' in html
     assert 'id="manual-detail-modal"' in html
     assert 'class="manual-detail"' in html
     assert 'class="manual-detail-track refresh"' in html
