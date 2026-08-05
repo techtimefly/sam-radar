@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from sam_radar.config import Settings
-from sam_radar.core import add_manual_opportunity, manual_search, refresh_report
+from sam_radar.core import add_manual_opportunity, manual_search, refresh_report, save_search_profile
 
 
 def write_profile(path: Path) -> None:
@@ -124,3 +124,68 @@ def test_refresh_report_includes_manual_tracked_opportunities(tmp_path: Path, mo
     latest = (reports / "latest.json").read_text()
     assert "Tracked Manual Opportunity" in latest
     assert "manual-report-1" in latest
+
+
+def test_refresh_report_uses_active_saved_search_profiles(tmp_path: Path, monkeypatch):
+    profile = tmp_path / "business.yaml"
+    reports = tmp_path / "reports"
+    data_dir = tmp_path / "data"
+    write_profile(profile)
+    settings = Settings(
+        sam_gov_api_key="test-key",
+        profile_path=profile,
+        reports_dir=reports,
+        data_dir=data_dir,
+        enable_descriptions=False,
+        report_limit=10,
+    )
+    save_search_profile(
+        settings,
+        {
+            "name": "DevSecOps CMMC",
+            "keywords": ["cmmc"],
+            "naics": ["541512"],
+            "psc": ["DJ01"],
+            "setAsides": ["SDVOSBC"],
+            "active": True,
+        },
+    )
+    save_search_profile(settings, {"name": "Inactive Draft", "keywords": ["training"], "active": False})
+    seen_profiles = []
+
+    def fake_search(api_key, profile_obj, **kwargs):
+        seen_profiles.append(profile_obj.display_name)
+        notice_id = "base-1" if profile_obj.display_name == "ExampleTech" else "saved-1"
+        title = "Base Security Support" if notice_id == "base-1" else "Saved Profile CMMC Support"
+        return {
+            "matches": [
+                {
+                    "noticeId": notice_id,
+                    "title": title,
+                    "type": "Solicitation",
+                    "postedDate": "2099-01-01",
+                    "responseDeadline": "2099-02-01T17:00:00+00:00",
+                    "naicsCode": "541512",
+                    "classificationCode": "DJ01",
+                    "organization": "Example Agency",
+                    "url": f"https://sam.gov/opp/{notice_id}/view",
+                    "score": 9,
+                    "reasons": ["profile match"],
+                    "recommendation": "Monitor",
+                }
+            ],
+            "postedFrom": "01/01/2099",
+            "postedTo": "01/08/2099",
+            "errors": [],
+        }
+
+    monkeypatch.setattr("sam_radar.core.search_opportunities", fake_search)
+
+    result = refresh_report(settings)
+    report_text = (reports / "latest.json").read_text()
+
+    assert result["ok"] is True
+    assert seen_profiles == ["ExampleTech", "DevSecOps CMMC"]
+    assert "Inactive Draft" not in seen_profiles
+    assert "Saved Profile CMMC Support" in report_text
+    assert '"searchProfiles": [\n        "DevSecOps CMMC"\n      ]' in report_text
