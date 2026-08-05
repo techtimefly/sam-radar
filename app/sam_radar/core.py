@@ -8,6 +8,7 @@ from .config import Settings, load_business_profile
 from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
 from .document_intake import MAX_DOCUMENT_BYTES, parse_registered_document, safe_filename
+from .llm import LLMClient, settings_summary
 from .notifications.slack import send_slack_webhook
 from .notifications.telegram import send_telegram
 from .reports import build_report_payload, days_until, write_reports
@@ -150,6 +151,15 @@ def search_coach(settings: Settings, payload: dict) -> dict:
         text = " ".join(str(part) for part in parts)
     status_text: list[str] = list(getattr(profile, "set_asides", []) or [])
     return {"ok": True, "mode": "deterministic", **suggest_profiles(text, status_text)}
+
+
+def ai_settings(settings: Settings) -> dict:
+    return {"ok": True, "ai": settings_summary(settings)}
+
+
+def ai_connection_test(settings: Settings) -> dict:
+    return LLMClient(settings).test_connection()
+
 
 def manual_search(settings: Settings, criteria: dict) -> dict:
     if not settings.sam_gov_api_key:

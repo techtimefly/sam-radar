@@ -245,6 +245,12 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="small-ghost"' in html
     assert 'id="lookup-status"' in html
     assert 'id="coach-status"' in html
+    assert 'id="ai-settings-card"' in html
+    assert 'id="ai-settings-details"' in html
+    assert 'id="ai-test"' in html
+    assert '/api/ai/settings' in html
+    assert '/api/ai/test' in html
+    assert 'function aiSettingsHtml' in html
     assert 'Saving code...' in html
     assert 'Draft profile saved.' in html
     assert 'function renderSearchIntel(data)' in html
