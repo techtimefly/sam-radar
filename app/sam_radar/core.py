@@ -13,7 +13,7 @@ from .ai_assist import (
     opportunity_requirements,
     opportunity_summary,
 )
-from .config import Settings, load_business_profile
+from .config import BusinessProfile, Settings, load_business_profile
 from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
 from .document_intake import MAX_DOCUMENT_BYTES, parse_registered_document, safe_filename
@@ -307,6 +307,77 @@ def manual_search(settings: Settings, criteria: dict) -> dict:
     return {"ok": True, "criteria": {k: v for k, v in params.items() if k != "api_key"}, "matches": results, "count": len(results), "reportsUnchanged": True, "descriptionErrors": description_errors}
 
 
+
+def _profile_from_saved(base: BusinessProfile, saved: dict) -> BusinessProfile:
+    return BusinessProfile(
+        name=base.name,
+        dba=str(saved.get("name") or base.display_name),
+        location=base.location,
+        summary=base.summary,
+        capabilities=base.capabilities,
+        naics_primary=[str(item) for item in (saved.get("naics") or base.naics_primary)],
+        naics_secondary=base.naics_secondary,
+        psc=[str(item) for item in (saved.get("psc") or base.psc)],
+        set_asides=[str(item) for item in (saved.get("setAsides") or base.set_asides)],
+        strong_keywords=[str(item).lower() for item in (saved.get("keywords") or base.strong_keywords)],
+        exclude_keywords=[str(item).lower() for item in (saved.get("exclusions") or base.exclude_keywords)],
+    )
+
+
+def _search_with_active_profiles(settings: Settings, profile: BusinessProfile, store: Store) -> dict:
+    payload = search_opportunities(
+        settings.sam_gov_api_key,
+        profile,
+        days=settings.search_days,
+        max_results=settings.report_limit,
+    )
+    combined: dict[str, dict] = {}
+
+    def add_matches(matches: list[dict], profile_name: str) -> None:
+        for match in matches:
+            key = str(match.get("noticeId") or match.get("title") or "")
+            if not key:
+                continue
+            if key not in combined:
+                item = dict(match)
+                item["searchProfiles"] = [profile_name]
+                combined[key] = item
+                continue
+            existing = combined[key]
+            profiles = existing.setdefault("searchProfiles", [])
+            if profile_name not in profiles:
+                profiles.append(profile_name)
+            if int(match.get("score") or 0) > int(existing.get("score") or 0):
+                existing.update({k: v for k, v in match.items() if k != "searchProfiles"})
+                existing["searchProfiles"] = profiles
+
+    add_matches(payload.get("matches") or [], "Base profile")
+    errors = list(payload.get("errors") or [])
+    for saved in store.saved_search_profiles():
+        if not saved.get("active"):
+            continue
+        saved_profile = _profile_from_saved(profile, saved)
+        try:
+            saved_payload = search_opportunities(
+                settings.sam_gov_api_key,
+                saved_profile,
+                days=max(1, min(int(saved.get("days") or settings.search_days), 60)),
+                limit=max(1, min(int(saved.get("limit") or 25), 100)),
+                max_results=settings.report_limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Saved profile {saved_profile.display_name}: {type(exc).__name__}: {exc}")
+            continue
+        errors.extend(f"Saved profile {saved_profile.display_name}: {error}" for error in (saved_payload.get("errors") or []))
+        add_matches(saved_payload.get("matches") or [], saved_profile.display_name)
+    matches = list(combined.values())
+    matches.sort(key=lambda item: item.get("score") or 0, reverse=True)
+    payload["matches"] = matches[: settings.report_limit]
+    payload["totalMatches"] = len(payload["matches"])
+    payload["errors"] = errors
+    return payload
+
+
 def add_manual_opportunity(settings: Settings, opp: dict) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     notice_id = str(opp.get("noticeId") or "")
@@ -469,12 +540,7 @@ def refresh_report(
         raise RuntimeError("SAM_GOV_API_KEY is required")
     profile = load_business_profile(settings.profile_path)
     store = Store(settings.data_dir / "sam-radar.sqlite3")
-    payload = search_opportunities(
-        settings.sam_gov_api_key,
-        profile,
-        days=settings.search_days,
-        max_results=settings.report_limit,
-    )
+    payload = _search_with_active_profiles(settings, profile, store)
     matches = payload.get("matches") or []
     match_ids = {str(match.get("noticeId") or "") for match in matches}
     manual_matches = [
