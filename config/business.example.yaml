@@ -1,0 +1,50 @@
+business:
+  name: Example Technology Services LLC
+  dba: ExampleTech
+  location: Denver, Colorado
+  summary: >
+    Technology consulting firm focused on secure software, infrastructure
+    modernization, compliance support, and technical training.
+
+capabilities:
+  - secure software development
+  - cybersecurity consulting
+  - cloud infrastructure
+  - technical training
+
+naics:
+  primary:
+    - "541690"
+  secondary:
+    - "541512"
+    - "541511"
+    - "513210"
+    - "611420"
+
+psc:
+  - "DJ01"
+  - "DA01"
+
+set_asides:
+  - SDVOSBC
+  - SDVOSBS
+  - VSA
+  - VSS
+  - SBA
+
+keywords:
+  strong:
+    - cybersecurity
+    - cmmc
+    - fedramp
+    - devsecops
+    - application security
+    - software development
+    - service desk
+    - identity
+    - technical training
+  exclude:
+    - janitorial
+    - construction
+    - wastewater
+    - elevator

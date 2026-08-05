@@ -1,0 +1,13 @@
+services:
+  sam-radar:
+    build: .
+    container_name: sam-radar
+    env_file:
+      - .env
+    ports:
+      - "8066:8066"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./reports:/app/reports
+    restart: unless-stopped
