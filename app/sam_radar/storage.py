@@ -947,6 +947,26 @@ class Store:
             row = conn.execute("SELECT * FROM proposal_documents WHERE id = ?", (document_id,)).fetchone()
         return self._proposal_document_from_row(row) if row else {}
 
+    def remove_proposal_document(self, document_id: int) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM proposal_documents WHERE id = ?", (document_id,)).fetchone()
+            if not row:
+                raise ValueError("document does not exist")
+            document = self._proposal_document_from_row(row)
+            conn.execute("DELETE FROM evidence_snippets WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM proposal_documents WHERE id = ?", (document_id,))
+            self._add_event(
+                conn,
+                document["noticeId"],
+                "proposal_document_removed",
+                document.get("label") or document.get("filename") or "",
+                "",
+                "Proposal document source removed",
+                now,
+            )
+        return document
+
     def proposal_document_map(self, notice_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         if not notice_ids:
             return {}

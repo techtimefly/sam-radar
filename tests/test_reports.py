@@ -130,14 +130,19 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="document-intake-form"' in html
     assert 'class="source-mode"' in html
     assert 'class="proposal-doc-mode active" data-mode="url"' in html
+    assert 'class="proposal-doc-url active"' in html
     assert 'class="proposal-doc-upload" type="file"' in html
+    assert 'function setDocumentSourceMode' in html
     assert 'function readFileAsBase64(file)' in html
     assert 'contentBase64' in html
     assert 'class="proposal-doc-add refresh"' in html
     assert 'Add Document' in html
     assert 'class="proposal-doc-parse"' in html
+    assert 'class="proposal-doc-remove"' in html
+    assert 'function removeProposalDocument' in html
     assert '/api/proposal-documents/add' in html
     assert '/api/proposal-documents/parse' in html
+    assert '/api/proposal-documents/remove' in html
     assert '/api/proposal-documents/' in html
     assert 'Offeror must provide secure engineering support.' in html
     assert 'id="proposal-workspace"' in html

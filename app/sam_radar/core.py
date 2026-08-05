@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+from pathlib import Path
 
 from .config import Settings, load_business_profile
 from .descriptions import enrich_descriptions
@@ -277,6 +278,35 @@ def parse_proposal_document(settings: Settings, payload: dict) -> dict:
     if not document_id:
         raise ValueError("documentId is required")
     return parse_registered_document(settings, store, document_id)
+
+
+def remove_proposal_document(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    document_id = int(payload.get("documentId") or payload.get("id") or 0)
+    if not document_id:
+        raise ValueError("documentId is required")
+    document = store.proposal_document(document_id)
+    if not document:
+        raise ValueError("document does not exist")
+    removed = store.remove_proposal_document(document_id)
+    data_dir = settings.data_dir.resolve()
+    for key in ("localPath", "extractedTextPath"):
+        raw_path = document.get(key) or ""
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if data_dir in resolved.parents and resolved.is_file():
+            resolved.unlink(missing_ok=True)
+    return {
+        "ok": True,
+        "document": removed,
+        "documents": store.proposal_documents(removed["noticeId"]),
+        "evidence": store.evidence_snippets(removed["noticeId"]),
+    }
 
 
 def proposal_documents(settings: Settings, notice_id: str) -> dict:

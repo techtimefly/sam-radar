@@ -58,3 +58,36 @@ def test_uploaded_document_payload_is_stored_and_parseable(tmp_path: Path):
     assert parsed["ok"] is True
     assert parsed["document"]["parseStatus"] == "parsed"
     assert parsed["evidence"]
+
+
+def test_remove_uploaded_document_clears_source_and_evidence(tmp_path: Path):
+    import base64
+
+    from sam_radar.config import Settings
+    from sam_radar.core import add_proposal_document, parse_proposal_document, remove_proposal_document
+    from sam_radar.storage import Store
+
+    settings = Settings(sam_gov_api_key="test", data_dir=tmp_path)
+    created = add_proposal_document(
+        settings,
+        {
+            "noticeId": "remove-1",
+            "sourceType": "upload",
+            "filename": "requirements.txt",
+            "contentType": "text/plain",
+            "contentBase64": base64.b64encode(b"The deadline and security requirement are important.").decode("ascii"),
+            "label": "Requirements",
+        },
+    )
+    parsed = parse_proposal_document(settings, {"documentId": created["document"]["id"]})
+    assert parsed["evidence"]
+
+    removed = remove_proposal_document(settings, {"documentId": created["document"]["id"]})
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+
+    assert removed["ok"] is True
+    assert removed["documents"] == []
+    assert removed["evidence"] == []
+    assert store.proposal_documents("remove-1") == []
+    assert store.evidence_snippets("remove-1") == []
+    assert not Path(created["document"]["localPath"]).exists()

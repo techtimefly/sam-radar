@@ -19,6 +19,7 @@ from .core import (
     proposal_documents,
     proposal_list,
     refresh_report,
+    remove_proposal_document,
     save_search_profile,
     save_search_reference_code,
     search_coach,
@@ -105,7 +106,13 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path in {"/api/proposals/create", "/api/proposals/stage", "/api/proposal-documents/add", "/api/proposal-documents/parse"}:
+        if parsed.path in {
+            "/api/proposals/create",
+            "/api/proposals/stage",
+            "/api/proposal-documents/add",
+            "/api/proposal-documents/parse",
+            "/api/proposal-documents/remove",
+        }:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; proposal writes are disabled."})
                 return
@@ -121,6 +128,8 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = update_proposal(self.settings, payload)
                 elif parsed.path == "/api/proposal-documents/add":
                     result = add_proposal_document(self.settings, payload)
+                elif parsed.path == "/api/proposal-documents/remove":
+                    result = remove_proposal_document(self.settings, payload)
                 else:
                     result = parse_proposal_document(self.settings, payload)
                 self._send_json(200, result)
