@@ -218,6 +218,25 @@ def add_manual_opportunity(settings: Settings, opp: dict) -> dict:
     workflow = store.add_manual_tracked(opp)
     return {"ok": True, "workflow": workflow}
 
+
+def create_proposal(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    notice_id = str(payload.get("noticeId") or "")
+    proposal = store.create_proposal(notice_id, payload)
+    return {"ok": True, "proposal": proposal}
+
+
+def update_proposal(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    notice_id = str(payload.get("noticeId") or "")
+    proposal = store.update_proposal_stage(notice_id, payload)
+    return {"ok": True, "proposal": proposal}
+
+
+def proposal_list(settings: Settings) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "proposals": store.proposals()}
+
 def refresh_report(
     settings: Settings,
     *,
@@ -255,7 +274,9 @@ def refresh_report(
     )
     if description_errors:
         payload.setdefault("errors", []).extend(f"description: {error}" for error in description_errors)
-    status_map = store.status_map([str(match.get("noticeId")) for match in matches if match.get("noticeId")])
+    notice_ids = [str(match.get("noticeId")) for match in matches if match.get("noticeId")]
+    status_map = store.status_map(notice_ids)
+    proposal_map = store.proposal_map(notice_ids)
     for match in matches:
         notice_id = str(match.get("noticeId") or "")
         workflow = status_map.get(notice_id) or store.get_status(notice_id)
@@ -271,6 +292,7 @@ def refresh_report(
         match["workflowDocuments"] = workflow.get("documents", [])
         match["workflowEvents"] = workflow.get("events", [])
         match["workflowUpdatedAt"] = workflow["updatedAt"]
+        match["proposal"] = proposal_map.get(notice_id) or {}
     unseen = store.unseen(matches)
     report = build_report_payload(payload, profile, settings, unseen=unseen)
     paths = write_reports(report, settings)

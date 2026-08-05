@@ -34,6 +34,29 @@ WORKFLOW_COLUMNS = {
     "no_bid_detail": "TEXT NOT NULL DEFAULT ''",
 }
 
+PROPOSAL_ROLES = {"prime", "subcontractor"}
+PROPOSAL_STAGES = ["intent", "intake", "docs", "requirements", "gaps", "strategy", "draft", "review"]
+PROPOSAL_STAGE_LABELS = {
+    "intent": "Intent",
+    "intake": "Intake",
+    "docs": "Docs",
+    "requirements": "Requirements",
+    "gaps": "Gaps",
+    "strategy": "Strategy",
+    "draft": "Draft",
+    "review": "Review",
+}
+
+
+def proposal_stage_items(current_stage: str) -> list[dict[str, str]]:
+    stage = current_stage if current_stage in PROPOSAL_STAGES else "intent"
+    current_index = PROPOSAL_STAGES.index(stage)
+    items = []
+    for idx, key in enumerate(PROPOSAL_STAGES):
+        state = "complete" if idx < current_index else "current" if idx == current_index else "pending"
+        items.append({"key": key, "label": PROPOSAL_STAGE_LABELS[key], "state": state})
+    return items
+
 
 def utc_now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
@@ -200,6 +223,27 @@ class Store:
                   notes TEXT NOT NULL DEFAULT '',
                   created_at TEXT NOT NULL
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_workspaces (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL UNIQUE,
+                  title TEXT NOT NULL DEFAULT '',
+                  role TEXT NOT NULL DEFAULT 'prime',
+                  stage TEXT NOT NULL DEFAULT 'intent',
+                  status TEXT NOT NULL DEFAULT 'active',
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_proposal_workspaces_stage
+                ON proposal_workspaces (stage, updated_at DESC)
                 """
             )
 
@@ -704,6 +748,156 @@ class Store:
             }
             for profile in profiles
         ]
+
+    def _proposal_from_row(self, row: sqlite3.Row | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        stage = row["stage"] if row["stage"] in PROPOSAL_STAGES else "intent"
+        role = row["role"] if row["role"] in PROPOSAL_ROLES else "prime"
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "title": row["title"],
+            "role": role,
+            "stage": stage,
+            "stageLabel": PROPOSAL_STAGE_LABELS[stage],
+            "status": row["status"],
+            "stages": proposal_stage_items(stage),
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "nextAction": payload.get("nextAction") or self._proposal_next_action(role, stage),
+            "notes": payload.get("notes", ""),
+        }
+
+    def _proposal_next_action(self, role: str, stage: str) -> str:
+        if stage == "intent":
+            return "Confirm prime pursuit and start intake." if role == "prime" else "Confirm subcontracting angle and identify likely prime partners."
+        if stage == "intake":
+            return "Collect solicitation links, deadlines, contacts, and submission instructions."
+        if stage == "docs":
+            return "Download or attach solicitation documents for review."
+        if stage == "requirements":
+            return "Extract must-have requirements, evaluation factors, and compliance items."
+        if stage == "gaps":
+            return "Identify capability, staffing, certification, and past-performance gaps."
+        if stage == "strategy":
+            return "Draft win theme, teaming plan, pricing posture, and response outline."
+        if stage == "draft":
+            return "Build proposal sections and assign reviewers."
+        return "Review final package, compliance matrix, and submission checklist."
+
+    def proposal_map(self, notice_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not notice_ids:
+            return {}
+        placeholders = ",".join("?" for _ in notice_ids)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, notice_id, title, role, stage, status, payload_json, created_at, updated_at
+                FROM proposal_workspaces WHERE notice_id IN ({placeholders})
+                """,
+                notice_ids,
+            ).fetchall()
+        return {row["notice_id"]: self._proposal_from_row(row) for row in rows}
+
+    def proposals(self) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, notice_id, title, role, stage, status, payload_json, created_at, updated_at
+                FROM proposal_workspaces ORDER BY datetime(updated_at) DESC, id DESC
+                """
+            ).fetchall()
+        return [self._proposal_from_row(row) for row in rows]
+
+    def create_proposal(self, notice_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(notice_id or payload.get("noticeId"), 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        role = clean_text(payload.get("role") or "prime", 40).lower()
+        if role not in PROPOSAL_ROLES:
+            raise ValueError("role must be prime or subcontractor")
+        title = clean_text(payload.get("title"), 500) or notice_id
+        now = utc_now()
+        proposal_payload = {
+            "nextAction": clean_text(payload.get("nextAction"), 1200) or self._proposal_next_action(role, "intent"),
+            "notes": clean_text(payload.get("notes"), 5000),
+        }
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT id, notice_id, title, role, stage, status, payload_json, created_at, updated_at
+                FROM proposal_workspaces WHERE notice_id = ?
+                """,
+                (notice_id,),
+            ).fetchone()
+            if existing:
+                return self._proposal_from_row(existing) | {"created": False}
+            conn.execute(
+                """
+                INSERT INTO proposal_workspaces (notice_id, title, role, stage, status, payload_json, created_at, updated_at)
+                VALUES (?, ?, ?, 'intent', 'active', ?, ?, ?)
+                """,
+                (notice_id, title, role, json.dumps(proposal_payload, sort_keys=True), now, now),
+            )
+            self._add_event(conn, notice_id, "proposal_created", "", role, f"Proposal workspace created as {role}", now)
+            row = conn.execute(
+                """
+                SELECT id, notice_id, title, role, stage, status, payload_json, created_at, updated_at
+                FROM proposal_workspaces WHERE notice_id = ?
+                """,
+                (notice_id,),
+            ).fetchone()
+        return self._proposal_from_row(row) | {"created": True}
+
+    def update_proposal_stage(self, notice_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(notice_id or payload.get("noticeId"), 200)
+        stage = clean_text(payload.get("stage"), 40).lower()
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        if stage not in PROPOSAL_STAGES:
+            raise ValueError(f"stage must be one of: {', '.join(PROPOSAL_STAGES)}")
+        now = utc_now()
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT id, notice_id, title, role, stage, status, payload_json, created_at, updated_at
+                FROM proposal_workspaces WHERE notice_id = ?
+                """,
+                (notice_id,),
+            ).fetchone()
+            if not existing:
+                raise ValueError("proposal workspace does not exist")
+            old_stage = existing["stage"]
+            payload_json = json.loads(existing["payload_json"] or "{}")
+            if "notes" in payload:
+                payload_json["notes"] = clean_text(payload.get("notes"), 5000)
+            if "nextAction" in payload:
+                payload_json["nextAction"] = clean_text(payload.get("nextAction"), 1200)
+            conn.execute(
+                """
+                UPDATE proposal_workspaces
+                SET stage = ?, payload_json = ?, updated_at = ?
+                WHERE notice_id = ?
+                """,
+                (stage, json.dumps(payload_json, sort_keys=True), now, notice_id),
+            )
+            if old_stage != stage:
+                self._add_event(conn, notice_id, "proposal_stage_changed", old_stage, stage, f"Proposal stage changed to {PROPOSAL_STAGE_LABELS[stage]}", now)
+            row = conn.execute(
+                """
+                SELECT id, notice_id, title, role, stage, status, payload_json, created_at, updated_at
+                FROM proposal_workspaces WHERE notice_id = ?
+                """,
+                (notice_id,),
+            ).fetchone()
+        return self._proposal_from_row(row)
 
     def manual_tracked_opportunities(self) -> list[dict[str, Any]]:
         with self.connect() as conn:

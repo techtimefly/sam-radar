@@ -110,3 +110,54 @@ def test_manual_tracked_opportunities_returns_saved_payloads(tmp_path: Path):
     assert saved[0]["noticeId"] == "manual-2"
     assert saved[0]["manualTracked"] is True
     assert saved[0]["descriptionParagraphs"] == ["Fetched description text."]
+
+
+def test_proposal_workspace_stage_engine_and_timeline_events(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    proposal = store.create_proposal(
+        "opp-1",
+        {"noticeId": "opp-1", "title": "Security Proposal", "role": "subcontractor"},
+    )
+
+    assert proposal["created"] is True
+    assert proposal["role"] == "subcontractor"
+    assert proposal["stage"] == "intent"
+    assert proposal["stages"][0] == {"key": "intent", "label": "Intent", "state": "current"}
+    assert "subcontracting" in proposal["nextAction"]
+
+    duplicate = store.create_proposal("opp-1", {"noticeId": "opp-1", "role": "prime"})
+    assert duplicate["created"] is False
+    assert duplicate["role"] == "subcontractor"
+
+    updated = store.update_proposal_stage("opp-1", {"noticeId": "opp-1", "stage": "docs", "notes": "Need attachments"})
+    assert updated["stage"] == "docs"
+    assert updated["stageLabel"] == "Docs"
+    assert [item["state"] for item in updated["stages"][:4]] == ["complete", "complete", "current", "pending"]
+    assert updated["notes"] == "Need attachments"
+
+    workflow = store.get_status("opp-1")
+    event_types = [event["type"] for event in workflow["events"]]
+    assert "proposal_stage_changed" in event_types
+    assert "proposal_created" in event_types
+    assert store.proposal_map(["opp-1"])["opp-1"]["stage"] == "docs"
+    assert store.proposals()[0]["noticeId"] == "opp-1"
+
+
+def test_proposal_validation_rejects_bad_role_and_stage(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    try:
+        store.create_proposal("opp-2", {"noticeId": "opp-2", "role": "maybe"})
+    except ValueError as exc:
+        assert "role must be prime or subcontractor" in str(exc)
+    else:
+        raise AssertionError("Expected invalid role to raise ValueError")
+
+    store.create_proposal("opp-2", {"noticeId": "opp-2", "role": "prime"})
+    try:
+        store.update_proposal_stage("opp-2", {"noticeId": "opp-2", "stage": "magic"})
+    except ValueError as exc:
+        assert "stage must be one of" in str(exc)
+    else:
+        raise AssertionError("Expected invalid stage to raise ValueError")

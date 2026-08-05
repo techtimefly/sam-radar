@@ -11,13 +11,16 @@ from .config import load_settings
 from .core import (
     add_manual_opportunity,
     add_search_feedback,
+    create_proposal,
     delete_search_reference_code,
     manual_search,
+    proposal_list,
     refresh_report,
     save_search_profile,
     save_search_reference_code,
     search_coach,
     search_intelligence,
+    update_proposal,
 )
 from .scheduler import Scheduler
 from .storage import Store
@@ -40,6 +43,9 @@ class RadarHandler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs
             query = (parse_qs(parsed.query).get("q") or [""])[0]
             self._send_json(200, search_intelligence(self.settings, query))
+            return
+        if parsed.path == "/api/proposals":
+            self._send_json(200, proposal_list(self.settings))
             return
         if self.path in {"/", ""}:
             self.path = "/reports/latest.html"
@@ -89,6 +95,21 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
                 payload = json.loads(body.decode("utf-8") or "{}")
                 self._send_json(200, search_coach(self.settings, payload))
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path in {"/api/proposals/create", "/api/proposals/stage"}:
+            if not self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; proposal writes are disabled."})
+                return
+            if self.headers.get("X-SAM-RADAR-TOKEN") != self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "Invalid or missing APP_WRITE_TOKEN."})
+                return
+            try:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+                payload = json.loads(body.decode("utf-8") or "{}")
+                result = create_proposal(self.settings, payload) if parsed.path == "/api/proposals/create" else update_proposal(self.settings, payload)
+                self._send_json(200, result)
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
