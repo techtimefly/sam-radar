@@ -107,6 +107,12 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '.toolbar{position:static}' not in html
     assert 'id="theme-button"' in html
     assert 'Use your local APP_WRITE_TOKEN here. This is separate from your SAM.gov API key.' in html
+    assert 'id="manual-detail-modal"' in html
+    assert 'class="manual-detail"' in html
+    assert 'class="manual-detail-track refresh"' in html
+    assert '<option value="7" selected>7 days</option>' in html
+    assert '<option value="25" selected>25</option>' in html
+    assert ".lane-grid label,.lane-empty{display:grid;grid-template-columns:18px 1fr" in html
     assert 'Updated: Aug 4, 2026 6:54 PM MDT' in html
     assert '<script id="report-data" type="application/json">{"summary"' in html
     assert '&quot;summary&quot;' not in html
