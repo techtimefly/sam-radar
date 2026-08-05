@@ -124,8 +124,17 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'function readinessHtml' in html
     assert 'function proposalAdjacentStage' in html
     assert 'Document Intake' in html
+    assert 'class="proposal-workspace-header"' in html
+    assert 'class="proposal-workspace-body"' in html
+    assert 'class="proposal-workspace-section"' in html
     assert 'class="document-intake-form"' in html
+    assert 'class="source-mode"' in html
+    assert 'class="proposal-doc-mode active" data-mode="url"' in html
+    assert 'class="proposal-doc-upload" type="file"' in html
+    assert 'function readFileAsBase64(file)' in html
+    assert 'contentBase64' in html
     assert 'class="proposal-doc-add refresh"' in html
+    assert 'Add Document' in html
     assert 'class="proposal-doc-parse"' in html
     assert '/api/proposal-documents/add' in html
     assert '/api/proposal-documents/parse' in html

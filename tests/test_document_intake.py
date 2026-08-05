@@ -31,3 +31,30 @@ def test_evidence_snippets_find_capture_terms_and_safe_filename():
     assert snippets
     assert snippets[0]["section"] in {"Security", "Requirement", "Certification", "Deadline"}
     assert safe_filename("https://example.test/A bad file name!.txt") == "A-bad-file-name-.txt"
+
+
+def test_uploaded_document_payload_is_stored_and_parseable(tmp_path: Path):
+    import base64
+
+    from sam_radar.config import Settings
+    from sam_radar.core import add_proposal_document, parse_proposal_document
+
+    settings = Settings(sam_gov_api_key="test", data_dir=tmp_path)
+    created = add_proposal_document(
+        settings,
+        {
+            "noticeId": "upload-1",
+            "sourceType": "upload",
+            "filename": "requirements.txt",
+            "contentType": "text/plain",
+            "contentBase64": base64.b64encode(b"The deadline and security requirement are important.").decode("ascii"),
+            "label": "Requirements",
+        },
+    )
+
+    assert created["document"]["sourceType"] == "upload"
+    assert created["document"]["filename"] == "requirements.txt"
+    parsed = parse_proposal_document(settings, {"documentId": created["document"]["id"]})
+    assert parsed["ok"] is True
+    assert parsed["document"]["parseStatus"] == "parsed"
+    assert parsed["evidence"]

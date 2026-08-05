@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import base64
 import datetime as dt
 
 from .config import Settings, load_business_profile
 from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
-from .document_intake import parse_registered_document
+from .document_intake import MAX_DOCUMENT_BYTES, parse_registered_document, safe_filename
 from .notifications.slack import send_slack_webhook
 from .notifications.telegram import send_telegram
 from .reports import build_report_payload, days_until, write_reports
@@ -241,7 +242,32 @@ def proposal_list(settings: Settings) -> dict:
 
 def add_proposal_document(settings: Settings, payload: dict) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
-    document = store.add_proposal_document(payload)
+    prepared = dict(payload)
+    if str(prepared.get("sourceType") or "").lower() == "upload":
+        notice_id = str(prepared.get("noticeId") or "").strip()
+        filename = safe_filename(str(prepared.get("filename") or "upload.txt"))
+        encoded = str(prepared.get("contentBase64") or "")
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        if not encoded:
+            raise ValueError("Uploaded file content is required")
+        data = base64.b64decode(encoded, validate=True)
+        if len(data) > MAX_DOCUMENT_BYTES:
+            raise ValueError("Uploaded document exceeds 10 MB limit.")
+        upload_dir = settings.data_dir / "documents" / safe_filename(notice_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        local_path = upload_dir / f"upload-{dt.datetime.now(dt.UTC).strftime('%Y%m%d%H%M%S')}-{filename}"
+        local_path.write_bytes(data)
+        prepared.update(
+            {
+                "source": f"upload:{local_path.name}",
+                "filename": filename,
+                "localPath": str(local_path),
+                "contentType": str(prepared.get("contentType") or "application/octet-stream"),
+                "sizeBytes": len(data),
+            }
+        )
+    document = store.add_proposal_document(prepared)
     return {"ok": True, "document": document, "documents": store.proposal_documents(document["noticeId"])}
 
 

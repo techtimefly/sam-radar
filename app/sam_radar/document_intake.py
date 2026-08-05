@@ -133,8 +133,8 @@ def _read_document_bytes(document: dict, settings: Settings) -> tuple[bytes, str
     source = str(document.get("source") or "")
     source_type = str(document.get("sourceType") or "url")
     filename = str(document.get("filename") or safe_filename(source))
-    if source_type == "local-path":
-        path = Path(source).expanduser()
+    if source_type in {"local-path", "upload"}:
+        path = Path(str(document.get("localPath") or source)).expanduser()
         if not path.exists() or not path.is_file():
             raise FileNotFoundError(f"Local document not found: {path}")
         data = path.read_bytes()
