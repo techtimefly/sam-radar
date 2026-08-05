@@ -11,6 +11,7 @@ from .config import load_settings
 from .core import (
     add_manual_opportunity,
     add_search_feedback,
+    delete_search_reference_code,
     manual_search,
     refresh_report,
     save_search_profile,
@@ -61,7 +62,7 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path in {"/api/search-reference/save", "/api/search-profiles/save", "/api/search-feedback", "/api/search-coach/save-profile"}:
+        if parsed.path in {"/api/search-reference/save", "/api/search-reference/delete", "/api/search-profiles/save", "/api/search-feedback", "/api/search-coach/save-profile"}:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; writes are disabled."})
                 return
@@ -73,6 +74,8 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 payload = json.loads(body.decode("utf-8") or "{}")
                 if parsed.path == "/api/search-reference/save":
                     result = save_search_reference_code(self.settings, payload)
+                elif parsed.path == "/api/search-reference/delete":
+                    result = delete_search_reference_code(self.settings, payload)
                 elif parsed.path == "/api/search-feedback":
                     result = add_search_feedback(self.settings, payload)
                 else:

@@ -149,6 +149,11 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'id="search-studio-view"' in html
     assert 'id="manual-profile"' in html
     assert 'id="manual-setaside"' in html
+    assert 'list="manual-naics-codes"' in html
+    assert 'id="manual-naics-codes"' in html
+    assert 'data-unsave-code' in html
+    assert "iconLabel('check','Saved')" in html
+    assert '/api/search-reference/delete' in html
     assert 'manual-search-form' in html
     assert 'manual-field-setaside' in html
     assert 'id="lookup-status"' in html

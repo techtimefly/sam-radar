@@ -1,7 +1,13 @@
 from pathlib import Path
 
 from sam_radar.config import Settings
-from sam_radar.core import save_search_profile, save_search_reference_code, search_coach, search_intelligence
+from sam_radar.core import (
+    delete_search_reference_code,
+    save_search_profile,
+    save_search_reference_code,
+    search_coach,
+    search_intelligence,
+)
 from sam_radar.search_intel import search_reference, set_asides_for_status, suggest_profiles
 from sam_radar.storage import Store
 
@@ -73,6 +79,11 @@ def test_saved_codes_profiles_and_core_search_intelligence(tmp_path: Path):
     assert saved_code["code"]["code"] == "541512"
     assert saved_profile["profile"]["name"] == "DevSecOps"
     assert intel["savedCodes"][0]["code"] == "541512"
+    deleted = delete_search_reference_code(settings, {"kind": "naics", "code": "541512"})
+    after_delete = search_intelligence(settings, "security")
+
+    assert deleted["code"]["deleted"] is True
+    assert after_delete["savedCodes"] == []
     assert intel["profiles"][0]["name"] == "DevSecOps"
     assert intel["profileQuality"][0]["recommendation"] in {"Monitor", "Tune"}
 

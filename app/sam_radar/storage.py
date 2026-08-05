@@ -580,6 +580,17 @@ class Store:
             for row in rows
         ]
 
+    def delete_reference_code(self, payload: dict[str, Any]) -> dict[str, Any]:
+        kind = clean_text(payload.get("kind"), 20).lower()
+        if kind not in {"naics", "psc"}:
+            raise ValueError("kind must be naics or psc")
+        code = clean_text(payload.get("code"), 20).upper()
+        if not code:
+            raise ValueError("code is required")
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM saved_reference_codes WHERE kind = ? AND code = ?", (kind, code))
+        return {"kind": kind, "code": code, "deleted": cur.rowcount > 0}
+
     def save_search_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
         name = clean_text(payload.get("name"), 160)
         if not name:

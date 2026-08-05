@@ -122,6 +122,11 @@ def save_search_reference_code(settings: Settings, payload: dict) -> dict:
     return {"ok": True, "code": store.save_reference_code(payload)}
 
 
+def delete_search_reference_code(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "code": store.delete_reference_code(payload)}
+
+
 def save_search_profile(settings: Settings, payload: dict) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     return {"ok": True, "profile": store.save_search_profile(payload)}
