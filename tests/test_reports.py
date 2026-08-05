@@ -133,6 +133,8 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="proposal-doc-url active"' in html
     assert 'class="proposal-doc-upload" type="file"' in html
     assert 'function setDocumentSourceMode' in html
+    assert 'function syncProposalDocuments' in html
+    assert '.document-intake-form .proposal-doc-file,.document-intake-form .proposal-doc-url{display:none}' in html
     assert 'function readFileAsBase64(file)' in html
     assert 'contentBase64' in html
     assert 'class="proposal-doc-add refresh"' in html
