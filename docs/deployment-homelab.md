@@ -50,7 +50,7 @@ curl -fsS http://127.0.0.1:8066/healthz
 
 Use `deploy/nginx/sam-radar.example.test.conf` as the vhost example. Install it on the active nginx host, enable it, then test and reload nginx.
 
-The example proxies to `http://DOCKER_HOST_IP:8066`. Change that upstream if your Docker host uses a different IP or port.
+The example proxies to `http://DOCKER_HOST_IP:8066`. Change that upstream if your Docker host uses a different IP or port. Keep `client_max_body_size 25m;` or higher for proposal document uploads.
 
 ## DNS And TLS
 

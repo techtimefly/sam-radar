@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import datetime as dt
+from pathlib import Path
 
 from .config import Settings, load_business_profile
 from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
+from .document_intake import MAX_DOCUMENT_BYTES, parse_registered_document, safe_filename
 from .notifications.slack import send_slack_webhook
 from .notifications.telegram import send_telegram
 from .reports import build_report_payload, days_until, write_reports
@@ -237,6 +240,79 @@ def proposal_list(settings: Settings) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     return {"ok": True, "proposals": store.proposals()}
 
+
+def add_proposal_document(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    prepared = dict(payload)
+    if str(prepared.get("sourceType") or "").lower() == "upload":
+        notice_id = str(prepared.get("noticeId") or "").strip()
+        filename = safe_filename(str(prepared.get("filename") or "upload.txt"))
+        encoded = str(prepared.get("contentBase64") or "")
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        if not encoded:
+            raise ValueError("Uploaded file content is required")
+        data = base64.b64decode(encoded, validate=True)
+        if len(data) > MAX_DOCUMENT_BYTES:
+            raise ValueError("Uploaded document exceeds 10 MB limit.")
+        upload_dir = settings.data_dir / "documents" / safe_filename(notice_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        local_path = upload_dir / f"upload-{dt.datetime.now(dt.UTC).strftime('%Y%m%d%H%M%S')}-{filename}"
+        local_path.write_bytes(data)
+        prepared.update(
+            {
+                "source": f"upload:{local_path.name}",
+                "filename": filename,
+                "localPath": str(local_path),
+                "contentType": str(prepared.get("contentType") or "application/octet-stream"),
+                "sizeBytes": len(data),
+            }
+        )
+    document = store.add_proposal_document(prepared)
+    return {"ok": True, "document": document, "documents": store.proposal_documents(document["noticeId"])}
+
+
+def parse_proposal_document(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    document_id = int(payload.get("documentId") or payload.get("id") or 0)
+    if not document_id:
+        raise ValueError("documentId is required")
+    return parse_registered_document(settings, store, document_id)
+
+
+def remove_proposal_document(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    document_id = int(payload.get("documentId") or payload.get("id") or 0)
+    if not document_id:
+        raise ValueError("documentId is required")
+    document = store.proposal_document(document_id)
+    if not document:
+        raise ValueError("document does not exist")
+    removed = store.remove_proposal_document(document_id)
+    data_dir = settings.data_dir.resolve()
+    for key in ("localPath", "extractedTextPath"):
+        raw_path = document.get(key) or ""
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if data_dir in resolved.parents and resolved.is_file():
+            resolved.unlink(missing_ok=True)
+    return {
+        "ok": True,
+        "document": removed,
+        "documents": store.proposal_documents(removed["noticeId"]),
+        "evidence": store.evidence_snippets(removed["noticeId"]),
+    }
+
+
+def proposal_documents(settings: Settings, notice_id: str) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "documents": store.proposal_documents(notice_id), "evidence": store.evidence_snippets(notice_id)}
+
 def refresh_report(
     settings: Settings,
     *,
@@ -277,6 +353,7 @@ def refresh_report(
     notice_ids = [str(match.get("noticeId")) for match in matches if match.get("noticeId")]
     status_map = store.status_map(notice_ids)
     proposal_map = store.proposal_map(notice_ids)
+    proposal_documents_map = store.proposal_document_map(notice_ids)
     for match in matches:
         notice_id = str(match.get("noticeId") or "")
         workflow = status_map.get(notice_id) or store.get_status(notice_id)
@@ -293,6 +370,8 @@ def refresh_report(
         match["workflowEvents"] = workflow.get("events", [])
         match["workflowUpdatedAt"] = workflow["updatedAt"]
         match["proposal"] = proposal_map.get(notice_id) or {}
+        match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
+        match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
     unseen = store.unseen(matches)
     report = build_report_payload(payload, profile, settings, unseen=unseen)
     paths = write_reports(report, settings)

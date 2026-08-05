@@ -161,3 +161,38 @@ def test_proposal_validation_rejects_bad_role_and_stage(tmp_path: Path):
         assert "stage must be one of" in str(exc)
     else:
         raise AssertionError("Expected invalid stage to raise ValueError")
+
+
+def test_proposal_document_registry_and_evidence_snippets(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    document = store.add_proposal_document(
+        {
+            "noticeId": "opp-doc-1",
+            "sourceType": "url",
+            "source": "https://example.test/solicitation.txt",
+            "label": "Solicitation",
+        }
+    )
+
+    assert document["parseStatus"] == "pending"
+    assert store.proposal_document_map(["opp-doc-1"])["opp-doc-1"][0]["label"] == "Solicitation"
+
+    parsed = store.update_proposal_document_parse(
+        document["id"],
+        {"parseStatus": "parsed", "contentType": "text/plain", "sizeBytes": 120, "extractedTextPath": "/tmp/out.txt"},
+    )
+    assert parsed["parseStatus"] == "parsed"
+    assert parsed["contentType"] == "text/plain"
+
+    snippets = store.replace_evidence_snippets(
+        "opp-doc-1",
+        document["id"],
+        [{"section": "Requirements", "snippet": "Offeror must provide security automation support.", "confidence": 0.8}],
+    )
+    assert snippets[0]["section"] == "Requirements"
+    assert snippets[0]["confidence"] == 0.8
+
+    event_types = [event["type"] for event in store.get_status("opp-doc-1")["events"]]
+    assert "proposal_document_added" in event_types
+    assert "proposal_document_parsed" in event_types

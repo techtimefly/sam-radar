@@ -105,6 +105,8 @@ server {
     listen 443 ssl;
     server_name sam-radar.lan;
 
+    client_max_body_size 25m;
+
     location / {
         proxy_pass http://127.0.0.1:8066;
         proxy_set_header Host $host;

@@ -57,6 +57,23 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "workflowDecisionReason": "Strong fit",
                 "workflowDocuments": [{"label": "PWS", "url": "https://example.test/pws.pdf", "reviewed": False}],
                 "workflowEvents": [{"type": "status_changed", "message": "Status changed", "createdAt": "2026-08-05T00:54:39+00:00"}],
+                "proposalDocuments": [
+                    {
+                        "id": 7,
+                        "noticeId": "abc-123",
+                        "sourceType": "url",
+                        "source": "https://example.test/solicitation.txt",
+                        "label": "Solicitation",
+                        "filename": "solicitation.txt",
+                        "contentType": "text/plain",
+                        "sizeBytes": 120,
+                        "parseStatus": "parsed",
+                        "parseError": "",
+                    }
+                ],
+                "evidenceSnippets": [
+                    {"id": 3, "documentId": 7, "section": "Requirements", "snippet": "Offeror must provide secure engineering support."}
+                ],
                 "proposal": {
                     "id": 1,
                     "noticeId": "abc-123",
@@ -106,6 +123,30 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'function proposalWorkspaceHtml' in html
     assert 'function readinessHtml' in html
     assert 'function proposalAdjacentStage' in html
+    assert 'Document Intake' in html
+    assert 'class="proposal-workspace-header"' in html
+    assert 'class="proposal-workspace-body"' in html
+    assert 'class="proposal-workspace-section"' in html
+    assert 'class="document-intake-form"' in html
+    assert 'class="source-mode"' in html
+    assert 'class="proposal-doc-mode active" data-mode="url"' in html
+    assert 'class="proposal-doc-url active"' in html
+    assert 'class="proposal-doc-upload" type="file"' in html
+    assert 'function setDocumentSourceMode' in html
+    assert 'function syncProposalDocuments' in html
+    assert '.document-intake-form .proposal-doc-file,.document-intake-form .proposal-doc-url{display:none}' in html
+    assert 'function readFileAsBase64(file)' in html
+    assert 'contentBase64' in html
+    assert 'class="proposal-doc-add refresh"' in html
+    assert 'Add Document' in html
+    assert 'class="proposal-doc-parse"' in html
+    assert 'class="proposal-doc-remove"' in html
+    assert 'function removeProposalDocument' in html
+    assert '/api/proposal-documents/add' in html
+    assert '/api/proposal-documents/parse' in html
+    assert '/api/proposal-documents/remove' in html
+    assert '/api/proposal-documents/' in html
+    assert 'Offeror must provide secure engineering support.' in html
     assert 'id="proposal-workspace"' in html
     assert 'class="readiness"' in html
     assert 'class="readiness-bar"' in html
