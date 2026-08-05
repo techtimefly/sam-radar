@@ -111,6 +111,8 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="readiness-bar"' in html
     assert 'class="missing-list"' in html
     assert 'class="proposal-workspace-open"' in html
+    assert '.proposal-meta span{border:1px solid var(--line);border-radius:6px' in html
+    assert '.proposal-meta b{display:block;color:var(--ink);font-size:11px' in html
     assert 'class="proposal-stage-jump"' in html
     assert 'Proposal: Docs' in html
     assert 'Document review pending' in html
