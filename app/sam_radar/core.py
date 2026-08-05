@@ -4,7 +4,7 @@ import base64
 import datetime as dt
 from pathlib import Path
 
-from .ai_assist import opportunity_requirements, opportunity_summary
+from .ai_assist import opportunity_gaps, opportunity_requirements, opportunity_summary
 from .config import Settings, load_business_profile
 from .descriptions import enrich_descriptions
 from .digest import build_digest, build_no_new_digest
@@ -160,6 +160,10 @@ def ai_settings(settings: Settings) -> dict:
 
 def ai_opportunity_requirements(settings: Settings, payload: dict) -> dict:
     return opportunity_requirements(settings, payload)
+
+
+def ai_opportunity_gaps(settings: Settings, payload: dict) -> dict:
+    return opportunity_gaps(settings, payload)
 
 
 def ai_connection_test(settings: Settings) -> dict:
