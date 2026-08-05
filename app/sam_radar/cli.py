@@ -12,6 +12,8 @@ from .core import (
     add_manual_opportunity,
     add_proposal_document,
     add_search_feedback,
+    ai_connection_test,
+    ai_settings,
     create_proposal,
     delete_search_reference_code,
     manual_search,
@@ -50,6 +52,9 @@ class RadarHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/proposals":
             self._send_json(200, proposal_list(self.settings))
+            return
+        if parsed.path == "/api/ai/settings":
+            self._send_json(200, ai_settings(self.settings))
             return
         if parsed.path.startswith("/api/proposal-documents/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
@@ -105,6 +110,15 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 self._send_json(200, search_coach(self.settings, payload))
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path == "/api/ai/test":
+            if not self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI connection tests are disabled."})
+                return
+            if self.headers.get("X-SAM-RADAR-TOKEN") != self.settings.app_write_token:
+                self._send_json(403, {"ok": False, "error": "Invalid or missing APP_WRITE_TOKEN."})
+                return
+            self._send_json(200, ai_connection_test(self.settings))
             return
         if parsed.path in {
             "/api/proposals/create",

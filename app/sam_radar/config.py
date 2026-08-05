@@ -82,6 +82,12 @@ class Settings:
     enable_telegram: bool = False
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    llm_provider: str = "none"
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    llm_timeout: int = 20
+    enable_ai_assist: bool = False
 
     @property
     def report_url_base(self) -> str:
@@ -117,6 +123,12 @@ def load_settings() -> Settings:
         enable_telegram=env_bool("ENABLE_TELEGRAM", False),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        llm_provider=os.getenv("LLM_PROVIDER", "none").strip().lower() or "none",
+        llm_base_url=os.getenv("LLM_BASE_URL", ""),
+        llm_model=os.getenv("LLM_MODEL", ""),
+        llm_api_key=os.getenv("LLM_API_KEY", "") or os.getenv("OPENAI_API_KEY", ""),
+        llm_timeout=env_int("LLM_TIMEOUT", 20),
+        enable_ai_assist=env_bool("ENABLE_AI_ASSIST", False),
     )
 
 
