@@ -145,6 +145,13 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="manual-description"' in html
     assert 'function refreshAfterManualTrack(msg)' in html
     assert 'descriptionPreviewHtml(opp)' in html
+    assert 'Search Intelligence Studio' in html
+    assert 'id="search-studio-view"' in html
+    assert 'id="manual-profile"' in html
+    assert 'id="manual-setaside"' in html
+    assert 'function renderSearchIntel(data)' in html
+    assert 'function loadSearchIntel' in html
+    assert '/api/search-coach' in html
     assert 'function descriptionHtml(opp)' in html
     assert 'The agency needs secure engineering support.' in html
     assert 'DESCRIPTION' in html
