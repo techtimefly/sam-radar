@@ -298,6 +298,91 @@ class Store:
                 ON evidence_snippets (notice_id, document_id)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_audit_events (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL DEFAULT '',
+                  action TEXT NOT NULL,
+                  provider TEXT NOT NULL DEFAULT 'none',
+                  mode TEXT NOT NULL DEFAULT 'disabled',
+                  model TEXT NOT NULL DEFAULT '',
+                  result TEXT NOT NULL DEFAULT '',
+                  external INTEGER NOT NULL DEFAULT 0,
+                  message TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_ai_audit_events_created
+                ON ai_audit_events (created_at DESC)
+                """
+            )
+
+    def record_ai_audit(self, payload: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        values = {
+            "notice_id": clean_text(payload.get("noticeId") or payload.get("notice_id"), 160),
+            "action": clean_text(payload.get("action"), 80) or "ai_action",
+            "provider": clean_text(payload.get("provider"), 80) or "none",
+            "mode": clean_text(payload.get("mode"), 40) or "disabled",
+            "model": clean_text(payload.get("model"), 160),
+            "result": clean_text(payload.get("result"), 80),
+            "external": 1 if payload.get("external") else 0,
+            "message": clean_text(payload.get("message"), 600),
+            "created_at": now,
+        }
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO ai_audit_events
+                  (notice_id, action, provider, mode, model, result, external, message, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    values["notice_id"],
+                    values["action"],
+                    values["provider"],
+                    values["mode"],
+                    values["model"],
+                    values["result"],
+                    values["external"],
+                    values["message"],
+                    values["created_at"],
+                ),
+            )
+            values["id"] = cur.lastrowid
+        return values
+
+    def ai_audit_events(self, limit: int = 25) -> list[dict[str, Any]]:
+        capped = max(1, min(int(limit or 25), 100))
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, notice_id, action, provider, mode, model, result, external, message, created_at
+                FROM ai_audit_events
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT ?
+                """,
+                (capped,),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "noticeId": row["notice_id"],
+                "action": row["action"],
+                "provider": row["provider"],
+                "mode": row["mode"],
+                "model": row["model"],
+                "result": row["result"],
+                "external": bool(row["external"]),
+                "message": row["message"],
+                "createdAt": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def _add_event(
         self,

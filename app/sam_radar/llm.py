@@ -52,15 +52,21 @@ def warnings(settings: Settings) -> list[str]:
 def settings_summary(settings: Settings) -> dict[str, Any]:
     provider = normalized_provider(settings)
     mode = ai_mode(settings)
+    external = mode == "cloud"
+    enabled = bool(settings.enable_ai_assist and provider != "none")
+    privacy_label = "External AI may receive opportunity text" if external else "Local/private AI path" if enabled else "No AI provider active"
     return {
         "provider": provider,
         "mode": mode,
-        "enabled": bool(settings.enable_ai_assist and provider != "none"),
+        "enabled": enabled,
         "model": settings.llm_model,
         "baseUrl": settings.llm_base_url,
         "apiKeyConfigured": bool(settings.llm_api_key),
         "timeout": settings.llm_timeout,
         "supportedProviders": sorted(SUPPORTED_PROVIDERS),
+        "external": external,
+        "privacyLabel": privacy_label,
+        "auditEnabled": True,
         "warnings": warnings(settings),
     }
 
