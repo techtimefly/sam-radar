@@ -13,6 +13,7 @@ from .core import (
     add_proposal_document,
     add_search_feedback,
     ai_connection_test,
+    ai_opportunity_requirements,
     ai_opportunity_summary,
     ai_settings,
     create_proposal,
@@ -112,7 +113,7 @@ class RadarHandler(SimpleHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
-        if parsed.path in {"/api/ai/test", "/api/ai/summary"}:
+        if parsed.path in {"/api/ai/test", "/api/ai/summary", "/api/ai/requirements"}:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; AI actions are disabled."})
                 return
@@ -122,7 +123,12 @@ class RadarHandler(SimpleHTTPRequestHandler):
             try:
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
                 payload = json.loads(body.decode("utf-8") or "{}")
-                result = ai_connection_test(self.settings) if parsed.path == "/api/ai/test" else ai_opportunity_summary(self.settings, payload)
+                if parsed.path == "/api/ai/test":
+                    result = ai_connection_test(self.settings)
+                elif parsed.path == "/api/ai/requirements":
+                    result = ai_opportunity_requirements(self.settings, payload)
+                else:
+                    result = ai_opportunity_summary(self.settings, payload)
                 self._send_json(200, result)
             except Exception as exc:  # noqa: BLE001
                 self._send_json(400, {"ok": False, "error": str(exc)})
