@@ -51,6 +51,8 @@ DOCUMENT_PARSE_STATUSES = {"pending", "parsed", "failed", "unsupported"}
 ARTIFACT_TYPES = {"outline", "prime-proposal", "subcontractor", "compliance-matrix", "forms-checklist", "questions", "notes"}
 ARTIFACT_STATUSES = {"draft", "review", "approved", "archived"}
 ARTIFACT_FORMATS = {"markdown", "text"}
+EVIDENCE_STATES = {"generated", "needs-review", "verified", "rejected", "superseded"}
+EVIDENCE_METHODS = {"manual", "document-intake", "ai-assisted", "imported", "legacy-snippet"}
 
 
 def proposal_stage_items(current_stage: str) -> list[dict[str, str]]:
@@ -99,6 +101,7 @@ class Store:
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -303,6 +306,41 @@ class Store:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS evidence_citations (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  proposal_id INTEGER,
+                  document_id INTEGER,
+                  revision_id TEXT NOT NULL DEFAULT '',
+                  page_section TEXT NOT NULL DEFAULT '',
+                  source_excerpt TEXT NOT NULL,
+                  extracted_claim TEXT NOT NULL DEFAULT '',
+                  extraction_method TEXT NOT NULL DEFAULT 'manual',
+                  confidence REAL NOT NULL DEFAULT 0,
+                  verification_state TEXT NOT NULL DEFAULT 'needs-review',
+                  verifier TEXT NOT NULL DEFAULT '',
+                  verified_at TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY(proposal_id) REFERENCES proposal_workspaces(id) ON DELETE SET NULL,
+                  FOREIGN KEY(document_id) REFERENCES proposal_documents(id) ON DELETE SET NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_evidence_citations_notice
+                ON evidence_citations (notice_id, verification_state, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_evidence_citations_document
+                ON evidence_citations (document_id, id)
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS proposal_artifacts (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   notice_id TEXT NOT NULL,
@@ -370,6 +408,78 @@ class Store:
                 ON ai_audit_events (created_at DESC)
                 """
             )
+
+    def _validate_evidence_payload(self, payload: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
+        notice_id = clean_text(payload.get("noticeId") or payload.get("notice_id"), 200)
+        if not partial and not notice_id:
+            raise ValueError("noticeId is required")
+        state = clean_text(payload.get("verificationState") or payload.get("verification_state") or "needs-review", 40).lower()
+        if state not in EVIDENCE_STATES:
+            raise ValueError(f"verificationState must be one of {', '.join(sorted(EVIDENCE_STATES))}")
+        method = clean_text(payload.get("extractionMethod") or payload.get("extraction_method") or "manual", 40).lower()
+        if method not in EVIDENCE_METHODS:
+            raise ValueError(f"extractionMethod must be one of {', '.join(sorted(EVIDENCE_METHODS))}")
+        try:
+            confidence = float(payload.get("confidence", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("confidence must be a number from 0 to 1") from exc
+        if not 0 <= confidence <= 1:
+            raise ValueError("confidence must be from 0 to 1")
+        excerpt = clean_text(payload.get("sourceExcerpt") or payload.get("source_excerpt") or payload.get("snippet"), 4000)
+        if not partial and not excerpt:
+            raise ValueError("sourceExcerpt is required")
+        proposal_id = payload.get("proposalId") or payload.get("proposal_id")
+        document_id = payload.get("documentId") or payload.get("document_id")
+        return {
+            "notice_id": notice_id,
+            "proposal_id": int(proposal_id) if proposal_id not in (None, "") else None,
+            "document_id": int(document_id) if document_id not in (None, "") else None,
+            "revision_id": clean_text(payload.get("revisionId") or payload.get("revision_id"), 160),
+            "page_section": clean_text(payload.get("pageSection") or payload.get("page_section") or payload.get("section"), 300),
+            "source_excerpt": excerpt,
+            "extracted_claim": clean_text(payload.get("extractedClaim") or payload.get("extracted_claim"), 2000),
+            "extraction_method": method,
+            "confidence": confidence,
+            "verification_state": state,
+            "verifier": clean_text(payload.get("verifier"), 200),
+        }
+
+    def _validate_evidence_references(self, conn: sqlite3.Connection, values: dict[str, Any]) -> None:
+        if values["proposal_id"] is not None:
+            proposal = conn.execute("SELECT notice_id FROM proposal_workspaces WHERE id = ?", (values["proposal_id"],)).fetchone()
+            if not proposal:
+                raise ValueError("proposalId does not exist")
+            if proposal["notice_id"] != values["notice_id"]:
+                raise ValueError("proposalId does not belong to noticeId")
+        if values["document_id"] is not None:
+            document = conn.execute("SELECT notice_id FROM proposal_documents WHERE id = ?", (values["document_id"],)).fetchone()
+            if not document:
+                raise ValueError("documentId does not exist")
+            if document["notice_id"] != values["notice_id"]:
+                raise ValueError("documentId does not belong to noticeId")
+
+    def _evidence_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "proposalId": row["proposal_id"],
+            "documentId": row["document_id"],
+            "revisionId": row["revision_id"],
+            "pageSection": row["page_section"],
+            "section": row["page_section"],
+            "sourceExcerpt": row["source_excerpt"],
+            "snippet": row["source_excerpt"],
+            "extractedClaim": row["extracted_claim"],
+            "extractionMethod": row["extraction_method"],
+            "confidence": row["confidence"],
+            "verificationState": row["verification_state"],
+            "reviewed": row["verification_state"] == "verified",
+            "verifier": row["verifier"],
+            "verifiedAt": row["verified_at"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "legacySnippet": False,
+        }
 
     def record_ai_audit(self, payload: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()
@@ -1090,6 +1200,14 @@ class Store:
                 raise ValueError("document does not exist")
             document = self._proposal_document_from_row(row)
             conn.execute("DELETE FROM evidence_snippets WHERE document_id = ?", (document_id,))
+            conn.execute(
+                """
+                UPDATE evidence_citations
+                SET document_id = NULL, verification_state = 'superseded', updated_at = ?
+                WHERE document_id = ?
+                """,
+                (now, document_id),
+            )
             conn.execute("DELETE FROM proposal_documents WHERE id = ?", (document_id,))
             self._add_event(
                 conn,
@@ -1147,12 +1265,57 @@ class Store:
     def replace_evidence_snippets(self, notice_id: str, document_id: int, snippets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         notice_id = clean_text(notice_id, 200)
         now = utc_now()
+        normalized_snippets: list[dict[str, Any]] = []
+        seen_input: set[tuple[str, str]] = set()
+        for item in snippets[:40]:
+            snippet = clean_text(item.get("snippet"), 1200)
+            if not snippet:
+                continue
+            section = clean_text(item.get("section"), 300)
+            key = (section, snippet)
+            if key in seen_input:
+                continue
+            seen_input.add(key)
+            normalized_snippets.append(
+                {
+                    "key": key,
+                    "section": section,
+                    "legacy_section": clean_text(section, 160),
+                    "snippet": snippet,
+                    "confidence": float(item.get("confidence") or 0),
+                    "claim": clean_text(item.get("extractedClaim") or item.get("claim") or snippet, 2000),
+                    "parser_state": "verified" if item.get("reviewed", False) else "generated",
+                    "reviewed": bool(item.get("reviewed", False)),
+                }
+            )
         with self.connect() as conn:
+            document = conn.execute("SELECT notice_id FROM proposal_documents WHERE id = ?", (document_id,)).fetchone()
+            if not document:
+                raise ValueError("documentId does not exist")
+            if document["notice_id"] != notice_id:
+                raise ValueError("documentId does not belong to noticeId")
             conn.execute("DELETE FROM evidence_snippets WHERE document_id = ?", (document_id,))
-            for item in snippets[:40]:
-                snippet = clean_text(item.get("snippet"), 1200)
-                if not snippet:
-                    continue
+            existing_rows = conn.execute(
+                """
+                SELECT *
+                FROM evidence_citations
+                WHERE notice_id = ?
+                  AND document_id = ?
+                  AND extraction_method = 'document-intake'
+                ORDER BY
+                  CASE WHEN verification_state = 'superseded' THEN 1 ELSE 0 END,
+                  id DESC
+                """,
+                (notice_id, document_id),
+            ).fetchall()
+            existing_by_identity: dict[tuple[str, str], list[sqlite3.Row]] = {}
+            for row in existing_rows:
+                key = (row["page_section"], row["source_excerpt"])
+                existing_by_identity.setdefault(key, []).append(row)
+            seen: set[tuple[str, str]] = set()
+            for item in normalized_snippets:
+                key = item["key"]
+                seen.add(key)
                 conn.execute(
                     """
                     INSERT INTO evidence_snippets (notice_id, document_id, section, snippet, confidence, reviewed, created_at, updated_at)
@@ -1161,15 +1324,271 @@ class Store:
                     (
                         notice_id,
                         document_id,
-                        clean_text(item.get("section"), 160),
-                        snippet,
-                        float(item.get("confidence") or 0),
-                        1 if item.get("reviewed", False) else 0,
+                        item["legacy_section"],
+                        item["snippet"],
+                        item["confidence"],
+                        1 if item["reviewed"] else 0,
                         now,
                         now,
                     ),
                 )
+                existing = existing_by_identity.get(key, [None])[0]
+                if existing:
+                    state = existing["verification_state"]
+                    verifier = existing["verifier"]
+                    verified_at = existing["verified_at"]
+                    if state in {"generated", "superseded"}:
+                        state = item["parser_state"]
+                        verifier = ""
+                        verified_at = now if item["parser_state"] == "verified" else ""
+                    conn.execute(
+                        """
+                        UPDATE evidence_citations
+                        SET extracted_claim = ?, confidence = ?, verification_state = ?,
+                            verifier = ?, verified_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (item["claim"], item["confidence"], state, verifier, verified_at, now, existing["id"]),
+                    )
+                    for duplicate in existing_by_identity.get(key, [])[1:]:
+                        if duplicate["verification_state"] != "superseded":
+                            conn.execute(
+                                """
+                                UPDATE evidence_citations
+                                SET verification_state = 'superseded', updated_at = ?
+                                WHERE id = ?
+                                """,
+                                (now, duplicate["id"]),
+                            )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO evidence_citations (
+                          notice_id, document_id, page_section, source_excerpt, extracted_claim,
+                          extraction_method, confidence, verification_state, verified_at, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, 'document-intake', ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            notice_id,
+                            document_id,
+                            item["section"],
+                            item["snippet"],
+                            item["claim"],
+                            item["confidence"],
+                            item["parser_state"],
+                            now if item["parser_state"] == "verified" else "",
+                            now,
+                            now,
+                        ),
+                    )
+            for key, rows in existing_by_identity.items():
+                if key in seen:
+                    continue
+                for row in rows:
+                    if row["verification_state"] != "superseded":
+                        conn.execute(
+                            """
+                            UPDATE evidence_citations
+                            SET verification_state = 'superseded', updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (now, row["id"]),
+                        )
         return self.evidence_snippets(notice_id)
+
+    def create_evidence_citation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        values = self._validate_evidence_payload(payload)
+        now = utc_now()
+        with self.connect() as conn:
+            self._validate_evidence_references(conn, values)
+            conn.execute(
+                """
+                INSERT INTO evidence_citations (
+                  notice_id, proposal_id, document_id, revision_id, page_section, source_excerpt,
+                  extracted_claim, extraction_method, confidence, verification_state, verifier,
+                  verified_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    values["notice_id"],
+                    values["proposal_id"],
+                    values["document_id"],
+                    values["revision_id"],
+                    values["page_section"],
+                    values["source_excerpt"],
+                    values["extracted_claim"],
+                    values["extraction_method"],
+                    values["confidence"],
+                    values["verification_state"],
+                    values["verifier"],
+                    now if values["verification_state"] == "verified" else "",
+                    now,
+                    now,
+                ),
+            )
+            citation_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            self._add_event(conn, values["notice_id"], "evidence_created", "", values["verification_state"], "Evidence citation created", now)
+        return self.evidence_citation(citation_id) or {}
+
+    def update_evidence_citation(self, evidence_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as conn:
+            existing = conn.execute("SELECT * FROM evidence_citations WHERE id = ?", (evidence_id,)).fetchone()
+            if not existing:
+                raise ValueError("evidence citation does not exist")
+            merged = {
+                "noticeId": existing["notice_id"],
+                "proposalId": existing["proposal_id"],
+                "documentId": existing["document_id"],
+                "revisionId": existing["revision_id"],
+                "pageSection": existing["page_section"],
+                "sourceExcerpt": existing["source_excerpt"],
+                "extractedClaim": existing["extracted_claim"],
+                "extractionMethod": existing["extraction_method"],
+                "confidence": existing["confidence"],
+                "verificationState": existing["verification_state"],
+                "verifier": existing["verifier"],
+                **payload,
+            }
+            merged["noticeId"] = existing["notice_id"]
+            values = self._validate_evidence_payload(merged)
+            self._validate_evidence_references(conn, values)
+            verified_at = existing["verified_at"]
+            if values["verification_state"] == "verified" and existing["verification_state"] != "verified":
+                verified_at = now
+            elif values["verification_state"] != "verified":
+                verified_at = ""
+            conn.execute(
+                """
+                UPDATE evidence_citations
+                SET proposal_id = ?, document_id = ?, revision_id = ?, page_section = ?,
+                    source_excerpt = ?, extracted_claim = ?, extraction_method = ?, confidence = ?,
+                    verification_state = ?, verifier = ?, verified_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    values["proposal_id"],
+                    values["document_id"],
+                    values["revision_id"],
+                    values["page_section"],
+                    values["source_excerpt"],
+                    values["extracted_claim"],
+                    values["extraction_method"],
+                    values["confidence"],
+                    values["verification_state"],
+                    values["verifier"],
+                    verified_at,
+                    now,
+                    evidence_id,
+                ),
+            )
+            if existing["verification_state"] != values["verification_state"]:
+                self._add_event(conn, existing["notice_id"], "evidence_verified", existing["verification_state"], values["verification_state"], "Evidence verification state changed", now)
+        return self.evidence_citation(evidence_id) or {}
+
+    def verify_evidence_citation(self, evidence_id: int, state: str, verifier: str = "") -> dict[str, Any]:
+        return self.update_evidence_citation(evidence_id, {"verificationState": state, "verifier": verifier})
+
+    def delete_evidence_citation(self, evidence_id: int) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM evidence_citations WHERE id = ?", (evidence_id,)).fetchone()
+            if not row:
+                raise ValueError("evidence citation does not exist")
+            conn.execute("DELETE FROM evidence_citations WHERE id = ?", (evidence_id,))
+        return self._evidence_from_row(row)
+
+    def evidence_citation(self, evidence_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM evidence_citations WHERE id = ?", (evidence_id,)).fetchone()
+        return self._evidence_from_row(row) if row else None
+
+    def evidence_citations(self, notice_id: str, *, include_legacy: bool = True) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM evidence_citations
+                WHERE notice_id = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (notice_id,),
+            ).fetchall()
+        citations = [self._evidence_from_row(row) for row in rows]
+        citations = self._dedupe_evidence(citations)
+        if include_legacy:
+            citations = self._merge_legacy_evidence(citations, self._legacy_evidence_as_citations(notice_id))
+        return citations
+
+    def _evidence_identity(self, item: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            item.get("documentId"),
+            item.get("pageSection") or item.get("section") or "",
+            item.get("sourceExcerpt") or item.get("snippet") or "",
+            item.get("extractionMethod") or "",
+        )
+
+    def _dedupe_evidence(self, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        selected: dict[tuple[Any, ...], dict[str, Any]] = {}
+        order: list[tuple[Any, ...]] = []
+        for item in citations:
+            key = self._evidence_identity(item)
+            existing = selected.get(key)
+            if existing is None:
+                selected[key] = item
+                order.append(key)
+                continue
+            if existing.get("verificationState") == "superseded" and item.get("verificationState") != "superseded":
+                selected[key] = item
+        return [selected[key] for key in order]
+
+    def _merge_legacy_evidence(self, citations: list[dict[str, Any]], legacy: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        citation_keys = {
+            (
+                item.get("documentId"),
+                item.get("pageSection") or item.get("section") or "",
+                item.get("sourceExcerpt") or item.get("snippet") or "",
+            )
+            for item in citations
+        }
+        merged = list(citations)
+        for item in legacy:
+            key = (
+                item.get("documentId"),
+                item.get("pageSection") or item.get("section") or "",
+                item.get("sourceExcerpt") or item.get("snippet") or "",
+            )
+            if key not in citation_keys:
+                merged.append(item)
+                citation_keys.add(key)
+        return merged
+
+    def _legacy_evidence_as_citations(self, notice_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item["id"],
+                "noticeId": item["noticeId"],
+                "proposalId": None,
+                "documentId": item["documentId"],
+                "revisionId": "",
+                "pageSection": item["section"],
+                "section": item["section"],
+                "sourceExcerpt": item["snippet"],
+                "snippet": item["snippet"],
+                "extractedClaim": item["snippet"],
+                "extractionMethod": "legacy-snippet",
+                "confidence": item["confidence"],
+                "verificationState": "verified" if item["reviewed"] else "generated",
+                "reviewed": item["reviewed"],
+                "verifier": "",
+                "verifiedAt": "",
+                "createdAt": item["createdAt"],
+                "updatedAt": item["updatedAt"],
+                "legacySnippet": True,
+            }
+            for item in self.evidence_snippets(notice_id)
+        ]
 
     def evidence_snippets(self, notice_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:

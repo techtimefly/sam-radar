@@ -276,6 +276,7 @@ def _attach_workflow_context(store: Store, matches: list[dict]) -> None:
         match["proposal"] = proposal_map.get(notice_id) or {}
         match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
+        match["evidenceCitations"] = store.evidence_citations(notice_id)
         match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
 
 
@@ -595,7 +596,12 @@ def add_proposal_document(settings: Settings, payload: dict) -> dict:
             }
         )
     document = store.add_proposal_document(prepared)
-    return {"ok": True, "document": document, "documents": store.proposal_documents(document["noticeId"])}
+    return {
+        "ok": True,
+        "document": document,
+        "documents": store.proposal_documents(document["noticeId"]),
+        "citations": store.evidence_citations(document["noticeId"]),
+    }
 
 
 def parse_proposal_document(settings: Settings, payload: dict) -> dict:
@@ -632,12 +638,58 @@ def remove_proposal_document(settings: Settings, payload: dict) -> dict:
         "document": removed,
         "documents": store.proposal_documents(removed["noticeId"]),
         "evidence": store.evidence_snippets(removed["noticeId"]),
+        "citations": store.evidence_citations(removed["noticeId"]),
     }
 
 
 def proposal_documents(settings: Settings, notice_id: str) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
-    return {"ok": True, "documents": store.proposal_documents(notice_id), "evidence": store.evidence_snippets(notice_id)}
+    return {
+        "ok": True,
+        "documents": store.proposal_documents(notice_id),
+        "evidence": store.evidence_snippets(notice_id),
+        "citations": store.evidence_citations(notice_id),
+    }
+
+
+def evidence_list(settings: Settings, notice_id: str) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "evidence": store.evidence_citations(notice_id)}
+
+
+def add_evidence(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    evidence = store.create_evidence_citation(payload)
+    return {"ok": True, "evidence": evidence, "items": store.evidence_citations(evidence["noticeId"])}
+
+
+def update_evidence(settings: Settings, payload: dict) -> dict:
+    evidence_id = int(payload.get("evidenceId") or payload.get("id") or 0)
+    if not evidence_id:
+        raise ValueError("evidenceId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    evidence = store.update_evidence_citation(evidence_id, payload)
+    return {"ok": True, "evidence": evidence, "items": store.evidence_citations(evidence["noticeId"])}
+
+
+def verify_evidence(settings: Settings, payload: dict) -> dict:
+    evidence_id = int(payload.get("evidenceId") or payload.get("id") or 0)
+    if not evidence_id:
+        raise ValueError("evidenceId is required")
+    state = str(payload.get("verificationState") or payload.get("state") or "verified")
+    verifier = str(payload.get("verifier") or "")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    evidence = store.verify_evidence_citation(evidence_id, state, verifier)
+    return {"ok": True, "evidence": evidence, "items": store.evidence_citations(evidence["noticeId"])}
+
+
+def delete_evidence(settings: Settings, payload: dict) -> dict:
+    evidence_id = int(payload.get("evidenceId") or payload.get("id") or 0)
+    if not evidence_id:
+        raise ValueError("evidenceId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    evidence = store.delete_evidence_citation(evidence_id)
+    return {"ok": True, "evidence": evidence, "items": store.evidence_citations(evidence["noticeId"])}
 
 
 def _markdown_filename(value: str) -> str:
@@ -745,6 +797,7 @@ def refresh_report(
         match["proposal"] = proposal_map.get(notice_id) or {}
         match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
+        match["evidenceCitations"] = store.evidence_citations(notice_id)
         match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
     unseen = store.unseen(matches)
     report = build_report_payload(payload, profile, settings, unseen=unseen)

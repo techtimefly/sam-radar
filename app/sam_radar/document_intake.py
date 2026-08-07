@@ -187,7 +187,7 @@ def parse_registered_document(settings: Settings, store: Store, document_id: int
             },
         )
         snippets = store.replace_evidence_snippets(document["noticeId"], document_id, evidence_from_text(parsed.text)) if parsed.text else store.evidence_snippets(document["noticeId"])
-        return {"ok": True, "document": updated, "evidence": snippets}
+        return {"ok": True, "document": updated, "evidence": snippets, "citations": store.evidence_citations(document["noticeId"])}
     except Exception as exc:  # noqa: BLE001
         updated = store.update_proposal_document_parse(document_id, {"parseStatus": "failed", "parseError": str(exc)})
-        return {"ok": False, "document": updated, "evidence": store.evidence_snippets(document["noticeId"]), "error": str(exc)}
+        return {"ok": False, "document": updated, "evidence": store.evidence_snippets(document["noticeId"]), "citations": store.evidence_citations(document["noticeId"]), "error": str(exc)}

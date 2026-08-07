@@ -55,6 +55,9 @@ def test_deterministic_summary_uses_description_and_evidence():
     assert summary["fit"] == "Security fit based on DJ01."
     assert summary["evidence"] == ["Offeror must provide CMMC documentation before award."]
     assert "SAM.gov description" in summary["sources"]
+    assert summary["sourceFacts"] == ["Offeror must provide CMMC documentation before award."]
+    assert summary["businessAssumptions"] == ["Security fit based on DJ01."]
+    assert summary["aiRecommendations"] == ["Review the opportunity and confirm bid/no-bid posture."]
 
 
 def test_deterministic_prime_templates_builds_editable_artifacts():
@@ -208,10 +211,11 @@ def test_deterministic_requirements_groups_source_aware_items():
     assert any("Evaluation will consider" in item["text"] for item in result["evaluationCriteria"])
     assert any("SF 1449" in item["text"] for item in result["requiredForms"])
     assert any(
-        item["source"].startswith("Parsed document evidence")
+        item["source"].startswith("Evidence citation")
         for items in result.values()
         for item in items
     )
+    assert any(item["category"] == "source-fact" for items in result.values() for item in items)
 
 
 def test_opportunity_requirements_falls_back_without_ai(tmp_path: Path):
@@ -242,6 +246,8 @@ def test_opportunity_requirements_falls_back_without_ai(tmp_path: Path):
     assert result["provider"] == "none"
     assert result["requirements"]["requirements"]
     assert result["requirements"]["evaluationCriteria"]
+    assert result["sourceFacts"] == ["Evaluation will use best value."]
+    assert result["aiRecommendations"]
 
 
 def test_deterministic_gap_analysis_flags_capture_blockers():
@@ -260,6 +266,9 @@ def test_deterministic_gap_analysis_flags_capture_blockers():
     assert "Proposal workspace not started" in titles
     assert "Solicitation package not registered" in titles
     assert "Compliance evidence needed" in titles
+    assert result["sourceFacts"] == []
+    assert result["businessAssumptions"]
+    assert result["aiRecommendations"]
     assert "Compressed response window" in titles
     assert result["strengths"]
 

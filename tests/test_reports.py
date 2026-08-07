@@ -226,6 +226,18 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
                 "evidenceSnippets": [
                     {"id": 3, "documentId": 7, "section": "Requirements", "snippet": "Offeror must provide secure engineering support."}
                 ],
+                "evidenceCitations": [
+                    {
+                        "id": 4,
+                        "documentId": 7,
+                        "pageSection": "PWS 3.1",
+                        "sourceExcerpt": "Offeror must provide secure engineering support.",
+                        "extractedClaim": "Secure engineering support is required.",
+                        "extractionMethod": "document-intake",
+                        "confidence": 0.82,
+                        "verificationState": "needs-review",
+                    }
+                ],
                 "proposalArtifacts": [
                     {
                         "id": 5,
@@ -321,6 +333,13 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert '/api/proposal-documents/parse' in html
     assert '/api/proposal-documents/remove' in html
     assert '/api/proposal-documents/' in html
+    assert 'Evidence & Citations' in html
+    assert 'class="citation-card citation-state-' in html
+    assert 'function citationCardHtml' in html
+    assert 'function verifyCitation' in html
+    assert '/api/evidence/verify' in html
+    assert 'View source excerpt' in html
+    assert 'Secure engineering support is required.' in html
     assert 'Artifact Drafts' in html
     assert 'Initial Outline' in html
     assert 'class="proposal-artifacts"' in html
@@ -533,3 +552,40 @@ def test_report_writes_csv_export_and_toolbar_link(tmp_path: Path):
     assert paths["latestCsvUrl"] == "https://sam-radar.example.test/reports/latest.csv"
     assert paths["csvPath"].endswith(".csv")
     assert 'href="/reports/latest.csv"' in html
+
+
+def test_citation_card_escapes_user_content_and_sanitizes_state_class(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    report = build_report_payload({"postedFrom": "08/01/2026", "postedTo": "08/04/2026", "matches": [], "errors": []}, profile, settings, unseen=[])
+    script = _extract_report_script(build_html_report(report))
+    helpers = "\n".join(
+        [
+            _extract_one_line_js_function(script, "escapeHtml"),
+            _extract_one_line_js_function(script, "safeClassToken"),
+            _extract_one_line_js_function(script, "icon"),
+            _extract_one_line_js_function(script, "iconLabel"),
+            _extract_one_line_js_function(script, "citationCardHtml"),
+        ]
+    )
+    js = textwrap.dedent(
+        f"""
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        {helpers}
+        const html = citationCardHtml({{
+          id: '7" onclick="alert(1)',
+          pageSection: '<img src=x onerror=alert(1)>',
+          sourceExcerpt: '</script><script>alert(1)</script>',
+          extractedClaim: 'Claim <b onclick=alert(1)>unsafe</b>',
+          extractionMethod: 'manual"><img src=x>',
+          confidence: 0.82,
+          verificationState: 'needs-review" onclick="alert(1)'
+        }});
+        assert(html.includes('citation-state-needs-review-onclick-alert-1'), 'state class is sanitized');
+        assert(!html.includes('<img'), 'raw image tag is not rendered');
+        assert(!html.includes('<script>'), 'raw script tag is not rendered');
+        assert(!html.includes('onclick="alert(1)'), 'raw event handler is not rendered');
+        assert(html.includes('&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;'), 'source excerpt is escaped');
+        """
+    )
+    subprocess.run(["node", "-e", js], check=True)
