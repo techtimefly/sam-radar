@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 
 from .config import load_settings
 from .core import (
+    add_evidence,
     add_manual_opportunity,
     add_proposal_artifact,
     add_proposal_document,
@@ -22,7 +23,9 @@ from .core import (
     ai_settings,
     ai_subcontractor_templates,
     create_proposal,
+    delete_evidence,
     delete_search_reference_code,
+    evidence_list,
     export_proposal_artifact_markdown,
     manual_search,
     notification_preview,
@@ -37,8 +40,10 @@ from .core import (
     save_search_reference_code,
     search_coach,
     search_intelligence,
+    update_evidence,
     update_proposal,
     update_proposal_artifact,
+    verify_evidence,
 )
 from .scheduler import Scheduler
 from .storage import Store
@@ -64,6 +69,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/proposals":
             self._send_json(200, proposal_list(self.settings))
+            return
+        if parsed.path.startswith("/api/evidence/"):
+            notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self._send_json(200, evidence_list(self.settings, notice_id))
             return
         if parsed.path == "/api/notifications/preview":
             try:
@@ -198,6 +207,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
             "/api/proposal-documents/remove",
             "/api/proposal-artifacts/add",
             "/api/proposal-artifacts/update",
+            "/api/evidence/add",
+            "/api/evidence/update",
+            "/api/evidence/verify",
+            "/api/evidence/delete",
         }:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; proposal writes are disabled."})
@@ -220,6 +233,14 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = add_proposal_artifact(self.settings, payload)
                 elif parsed.path == "/api/proposal-artifacts/update":
                     result = update_proposal_artifact(self.settings, payload)
+                elif parsed.path == "/api/evidence/add":
+                    result = add_evidence(self.settings, payload)
+                elif parsed.path == "/api/evidence/update":
+                    result = update_evidence(self.settings, payload)
+                elif parsed.path == "/api/evidence/verify":
+                    result = verify_evidence(self.settings, payload)
+                elif parsed.path == "/api/evidence/delete":
+                    result = delete_evidence(self.settings, payload)
                 else:
                     result = parse_proposal_document(self.settings, payload)
                 self._send_json(200, result)

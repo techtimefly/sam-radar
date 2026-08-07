@@ -198,6 +198,274 @@ def test_proposal_document_registry_and_evidence_snippets(tmp_path: Path):
     assert "proposal_document_parsed" in event_types
 
 
+def test_evidence_citation_crud_verification_and_legacy_aliases(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-cite-1", "sourceType": "url", "source": "https://example.test/pws.txt", "label": "PWS"})
+
+    citation = store.create_evidence_citation(
+        {
+            "noticeId": "opp-cite-1",
+            "documentId": doc["id"],
+            "pageSection": "PWS 3.1",
+            "sourceExcerpt": "Contractor shall provide secure engineering support.",
+            "extractedClaim": "Secure engineering support is required.",
+            "extractionMethod": "manual",
+            "confidence": 0.91,
+        }
+    )
+
+    assert citation["verificationState"] == "needs-review"
+    assert citation["snippet"] == "Contractor shall provide secure engineering support."
+    assert citation["section"] == "PWS 3.1"
+    assert store.evidence_citations("opp-cite-1")[0]["extractedClaim"] == "Secure engineering support is required."
+
+    verified = store.verify_evidence_citation(citation["id"], "verified", "Capture Lead")
+    assert verified["verificationState"] == "verified"
+    assert verified["reviewed"] is True
+    assert verified["verifier"] == "Capture Lead"
+    assert verified["verifiedAt"]
+
+    updated = store.update_evidence_citation(citation["id"], {"confidence": 0.5, "verificationState": "needs-review"})
+    assert updated["confidence"] == 0.5
+    assert updated["verifiedAt"] == ""
+
+    deleted = store.delete_evidence_citation(citation["id"])
+    assert deleted["id"] == citation["id"]
+    assert store.evidence_citations("opp-cite-1") == []
+
+
+def test_evidence_validation_rejects_bad_state_confidence_and_missing_excerpt(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+
+    for payload, expected in [
+        ({"noticeId": "bad", "sourceExcerpt": "x", "verificationState": "maybe"}, "verificationState must be one of"),
+        ({"noticeId": "bad", "sourceExcerpt": "x", "confidence": 1.2}, "confidence must be from 0 to 1"),
+        ({"noticeId": "bad"}, "sourceExcerpt is required"),
+    ]:
+        try:
+            store.create_evidence_citation(payload)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("Expected invalid evidence payload to raise ValueError")
+
+
+def test_evidence_validation_rejects_missing_and_cross_notice_references(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-ref-1", "sourceType": "url", "source": "https://example.test/ref-1.txt"})
+    other_doc = store.add_proposal_document({"noticeId": "opp-ref-2", "sourceType": "url", "source": "https://example.test/ref-2.txt"})
+    proposal = store.create_proposal("opp-ref-1", {"noticeId": "opp-ref-1", "role": "prime"})
+    other_proposal = store.create_proposal("opp-ref-2", {"noticeId": "opp-ref-2", "role": "prime"})
+
+    invalid_payloads = [
+        ({"noticeId": "opp-ref-1", "documentId": 999_999, "sourceExcerpt": "x"}, "documentId does not exist"),
+        ({"noticeId": "opp-ref-1", "documentId": other_doc["id"], "sourceExcerpt": "x"}, "documentId does not belong to noticeId"),
+        ({"noticeId": "opp-ref-1", "proposalId": 999_999, "sourceExcerpt": "x"}, "proposalId does not exist"),
+        ({"noticeId": "opp-ref-1", "proposalId": other_proposal["id"], "sourceExcerpt": "x"}, "proposalId does not belong to noticeId"),
+    ]
+    for payload, expected in invalid_payloads:
+        try:
+            store.create_evidence_citation(payload)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"Expected {expected}")
+
+    citation = store.create_evidence_citation({"noticeId": "opp-ref-1", "proposalId": proposal["id"], "documentId": doc["id"], "sourceExcerpt": "valid"})
+    for payload, expected in [
+        ({"documentId": other_doc["id"]}, "documentId does not belong to noticeId"),
+        ({"proposalId": other_proposal["id"]}, "proposalId does not belong to noticeId"),
+        ({"noticeId": "opp-ref-2", "documentId": other_doc["id"]}, "documentId does not belong to noticeId"),
+        ({"noticeId": "opp-ref-2", "proposalId": other_proposal["id"]}, "proposalId does not belong to noticeId"),
+        ({"documentId": 999_999}, "documentId does not exist"),
+        ({"proposalId": 999_999}, "proposalId does not exist"),
+    ]:
+        try:
+            store.update_evidence_citation(citation["id"], payload)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"Expected {expected}")
+
+
+def test_foreign_keys_enabled_and_document_delete_preserves_citations(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-fk-1", "sourceType": "url", "source": "https://example.test/fk.txt"})
+    citation = store.create_evidence_citation({"noticeId": "opp-fk-1", "documentId": doc["id"], "sourceExcerpt": "Keep this citation."})
+
+    with store.connect() as conn:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    removed = store.remove_proposal_document(doc["id"])
+    kept = store.evidence_citation(citation["id"])
+
+    assert removed["id"] == doc["id"]
+    assert kept is not None
+    assert kept["documentId"] is None
+    assert kept["verificationState"] == "superseded"
+    with store.connect() as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_replace_legacy_evidence_snippets_creates_citations_and_supersedes_old_parse(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-cite-2", "sourceType": "url", "source": "https://example.test/pws.txt", "label": "PWS"})
+
+    first = store.replace_evidence_snippets("opp-cite-2", doc["id"], [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}])
+    second = store.replace_evidence_snippets("opp-cite-2", doc["id"], [{"section": "B", "snippet": "Evaluation will use best value.", "confidence": 0.7}])
+
+    assert first[0]["snippet"] == "Offeror must submit a plan."
+    assert second[0]["snippet"] == "Evaluation will use best value."
+    citations = store.evidence_citations("opp-cite-2", include_legacy=False)
+    assert {item["verificationState"] for item in citations} == {"generated", "superseded"}
+    assert any(item["pageSection"] == "B" for item in citations)
+
+
+def test_replace_evidence_snippets_preserves_verified_unchanged_citation_review_metadata(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-reparse-verified", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    store.replace_evidence_snippets(
+        "opp-reparse-verified",
+        doc["id"],
+        [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}],
+    )
+    original = store.evidence_citations("opp-reparse-verified", include_legacy=False)[0]
+    verified = store.verify_evidence_citation(original["id"], "verified", "Capture Lead")
+
+    store.replace_evidence_snippets(
+        "opp-reparse-verified",
+        doc["id"],
+        [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.55}],
+    )
+
+    citations = store.evidence_citations("opp-reparse-verified", include_legacy=False)
+    assert len(citations) == 1
+    assert citations[0]["id"] == original["id"]
+    assert citations[0]["verificationState"] == "verified"
+    assert citations[0]["verifier"] == "Capture Lead"
+    assert citations[0]["verifiedAt"] == verified["verifiedAt"]
+    assert citations[0]["confidence"] == 0.55
+
+
+def test_replace_evidence_snippets_preserves_rejected_unchanged_citation_review_metadata(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-reparse-rejected", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    store.replace_evidence_snippets(
+        "opp-reparse-rejected",
+        doc["id"],
+        [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}],
+    )
+    original = store.evidence_citations("opp-reparse-rejected", include_legacy=False)[0]
+    rejected = store.verify_evidence_citation(original["id"], "rejected", "Capture Lead")
+
+    store.replace_evidence_snippets(
+        "opp-reparse-rejected",
+        doc["id"],
+        [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.55, "reviewed": True}],
+    )
+
+    citations = store.evidence_citations("opp-reparse-rejected", include_legacy=False)
+    assert len(citations) == 1
+    assert citations[0]["id"] == original["id"]
+    assert citations[0]["verificationState"] == "rejected"
+    assert citations[0]["verifier"] == "Capture Lead"
+    assert citations[0]["verifiedAt"] == rejected["verifiedAt"] == ""
+    assert citations[0]["reviewed"] is False
+
+
+def test_replace_evidence_snippets_supersedes_changed_citation_with_coherent_review_metadata(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-reparse-changed", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    store.replace_evidence_snippets(
+        "opp-reparse-changed",
+        doc["id"],
+        [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}],
+    )
+    original = store.evidence_citations("opp-reparse-changed", include_legacy=False)[0]
+    verified = store.verify_evidence_citation(original["id"], "verified", "Capture Lead")
+
+    store.replace_evidence_snippets(
+        "opp-reparse-changed",
+        doc["id"],
+        [{"section": "B", "snippet": "Evaluation will use best value.", "confidence": 0.7}],
+    )
+
+    citations = store.evidence_citations("opp-reparse-changed", include_legacy=False)
+    superseded = next(item for item in citations if item["id"] == original["id"])
+    active = next(item for item in citations if item["verificationState"] != "superseded")
+    assert superseded["verificationState"] == "superseded"
+    assert superseded["verifier"] == "Capture Lead"
+    assert superseded["verifiedAt"] == verified["verifiedAt"]
+    assert active["pageSection"] == "B"
+    assert active["verificationState"] == "generated"
+    assert active["verifier"] == ""
+    assert active["verifiedAt"] == ""
+
+
+def test_replace_evidence_snippets_repeated_reparse_has_no_duplicate_active_citations(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-reparse-repeat", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    snippet = {"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}
+
+    store.replace_evidence_snippets("opp-reparse-repeat", doc["id"], [snippet])
+    store.replace_evidence_snippets(
+        "opp-reparse-repeat",
+        doc["id"],
+        [snippet, {**snippet, "section": " A ", "snippet": " Offeror must submit a plan. ", "confidence": 0.4}],
+    )
+    store.replace_evidence_snippets(
+        "opp-reparse-repeat",
+        doc["id"],
+        [
+            {**snippet, "reviewed": True},
+            {**snippet, "section": " A ", "snippet": " Offeror must submit a plan. ", "confidence": 0.4},
+        ],
+    )
+
+    legacy = store.evidence_snippets("opp-reparse-repeat")
+    citations = store.evidence_citations("opp-reparse-repeat", include_legacy=False)
+    active = [item for item in citations if item["verificationState"] != "superseded"]
+    assert len(legacy) == 1
+    assert legacy[0]["section"] == "A"
+    assert legacy[0]["snippet"] == "Offeror must submit a plan."
+    assert legacy[0]["confidence"] == 0.8
+    assert len(active) == 1
+    assert active[0]["verificationState"] == "verified"
+    assert active[0]["verifiedAt"]
+    assert active[0]["verifier"] == ""
+    assert active[0]["confidence"] == 0.8
+
+
+def test_mixed_legacy_snippets_are_preserved_without_parser_duplicate_citations(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-mixed-1", "sourceType": "url", "source": "https://example.test/mixed.txt"})
+    now = "2026-08-06T00:00:00+00:00"
+    with store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO evidence_snippets (notice_id, document_id, section, snippet, confidence, reviewed, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("opp-mixed-1", doc["id"], "Legacy", "Legacy-only snippet.", 0.4, 0, now, now),
+        )
+
+    manual = store.create_evidence_citation({"noticeId": "opp-mixed-1", "sourceExcerpt": "Manual citation.", "extractionMethod": "manual"})
+    mixed = store.evidence_citations("opp-mixed-1")
+    assert {item["sourceExcerpt"] for item in mixed} == {"Manual citation.", "Legacy-only snippet."}
+    assert any(item["legacySnippet"] for item in mixed)
+
+    store.replace_evidence_snippets("opp-mixed-1", doc["id"], [{"section": "Legacy", "snippet": "Legacy-only snippet.", "confidence": 0.4}])
+    store.replace_evidence_snippets("opp-mixed-1", doc["id"], [{"section": "Legacy", "snippet": "Legacy-only snippet.", "confidence": 0.4}])
+    citations = store.evidence_citations("opp-mixed-1")
+    parser_created = [item for item in citations if item["extractionMethod"] == "document-intake" and item["sourceExcerpt"] == "Legacy-only snippet."]
+
+    assert len(parser_created) == 1
+    assert all(not item["legacySnippet"] for item in citations if item["sourceExcerpt"] == "Legacy-only snippet.")
+    assert any(item["id"] == manual["id"] for item in citations)
+    with store.connect() as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_proposal_artifact_registry_updates_versions_and_events(tmp_path: Path):
     store = Store(tmp_path / "sam-radar.sqlite3")
 

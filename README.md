@@ -15,6 +15,7 @@ Define your business profile once. SAM Radar searches SAM.gov, scores opportunit
 - Provides a browser refresh button
 - Adds a manual SAM search workspace that does not overwrite generated reports
 - Prevents manually tracking opportunities already in the report or local tracking store
+- Stores proposal evidence and citations in SQLite with source excerpts, claims, confidence, and human verification state
 - Keeps local seen/history data out of Git
 - Supports Docker and Docker Compose
 - Separates listen address from public `APP_BASE_URL` for reverse proxies
@@ -133,6 +134,14 @@ Clicking Track or Add Opportunity requires `APP_WRITE_TOKEN`; SAM Radar rejects 
 
 Status and notes writes require `APP_WRITE_TOKEN`. Generate one with `sam-radar generate-token` or `scripts/generate-token.sh`, save it in `.env`, then use the dashboard Unlock control to store it in your browser. This is separate from your SAM.gov API key. Leave `APP_WRITE_TOKEN` blank to disable browser writes.
 
+## Evidence And Citations
+
+Proposal document parsing still produces backwards-compatible `evidenceSnippets`, and now also writes durable `evidenceCitations` records linked to the opportunity, optional proposal/document IDs, page or section, source excerpt, extracted claim, extraction method, confidence, and verification state.
+
+Read endpoints are available under `/api/evidence/{noticeId}`. Mutations under `/api/evidence/add`, `/api/evidence/update`, `/api/evidence/verify`, and `/api/evidence/delete` require `APP_WRITE_TOKEN`.
+
+Summary, Requirements, and Gap assist outputs use citation records when present and separate source facts, business assumptions, and AI recommendations. The deterministic path remains available when AI is disabled or unavailable, and prompts/source text are not stored in the local AI audit log.
+
 ## Notifications And Scheduler
 
 Enable scheduled daily refreshes with:
@@ -154,6 +163,7 @@ Slack and Telegram are optional. Configure either or both in `.env`. Daily diges
 - `docs/ux-density.md` documents the pipeline cockpit design direction and responsive QA targets.
 - `docs/navigation-controls.md` documents sticky navigation, back-to-top, and board lane visibility controls.
 - `docs/design-system.md` documents report tokens, component primitives, accessibility, and responsive conventions.
+- `docs/evidence-citations.md` documents the SQLite evidence model, APIs, verification states, UI behavior, and AI assist boundaries.
 - `deploy/nginx/sam-radar.lan.conf` is an example nginx vhost.
 
 ## Local Development
@@ -176,6 +186,7 @@ sam-radar serve
 - v0.4: opportunity pipeline with detail view, follow-up queue, event history, document review tracking, metrics, and optional workflow notifications
 - v0.5: opportunity control center with archive/unarchive, isolated manual search, duplicate guards, and resource links
 - v0.8: professional design system with tokens, reusable primitives, accessible feedback states, responsive density, and a Resources showcase
+- v0.9: evidence and citation foundation with durable source excerpts, verification workflow, and source-aware assist output
 - v1.0: stable self-hosted release
 
 ## Security Notes

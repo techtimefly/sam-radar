@@ -39,8 +39,8 @@ def _source_text(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> tuple[s
             sources.append(label)
             chunks.append(text.strip())
     if evidence:
-        sources.append("Parsed document evidence")
-        chunks.extend(str(item.get("snippet") or "") for item in evidence[:8] if item.get("snippet"))
+        sources.append("Evidence citations")
+        chunks.extend(str(item.get("sourceExcerpt") or item.get("snippet") or "") for item in evidence[:8] if item.get("sourceExcerpt") or item.get("snippet"))
     return "\n".join(chunks), sources
 
 
@@ -58,10 +58,12 @@ def _source_items(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> list[d
             if text:
                 items.append({"source": label, "text": text})
     for item in evidence[:16]:
-        text = str(item.get("snippet") or "").strip()
+        text = str(item.get("sourceExcerpt") or item.get("snippet") or "").strip()
         if text:
-            section = str(item.get("section") or "Parsed evidence").strip()
-            items.append({"source": f"Parsed document evidence: {section}", "text": text})
+            section = str(item.get("pageSection") or item.get("section") or "Evidence").strip()
+            state = str(item.get("verificationState") or "generated").strip()
+            confidence = str(item.get("confidence") or 0)
+            items.append({"source": f"Evidence citation: {section} ({state}, confidence {confidence})", "text": text})
     return items
 
 
@@ -74,7 +76,8 @@ _REQUIREMENT_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 
 def _requirement_entry(text: str, source: str, label: str, confidence: float) -> dict[str, Any]:
-    return {"text": text[:360], "source": source, "label": label, "confidence": confidence}
+    category = "source-fact" if source.startswith("Evidence citation") or source == "SAM.gov description" else "business-assumption"
+    return {"text": text[:360], "source": source, "label": label, "confidence": confidence, "category": category}
 
 
 def deterministic_requirements(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -90,7 +93,7 @@ def deterministic_requirements(opp: dict[str, Any], evidence: list[dict[str, Any
                     if marker in seen:
                         continue
                     seen.add(marker)
-                    confidence = 0.86 if source.startswith("Parsed document") else 0.72
+                    confidence = 0.86 if source.startswith("Evidence citation") else 0.72
                     buckets[key].append(_requirement_entry(sentence, source, label, confidence))
                     break
     if not any(buckets.values()):
@@ -107,7 +110,7 @@ def opportunity_requirements(settings: Settings, payload: dict[str, Any]) -> dic
     opp = _latest_match(settings, notice_id)
     if not opp:
         raise ValueError("Opportunity not found in latest report")
-    evidence = store.evidence_snippets(notice_id)
+    evidence = store.evidence_citations(notice_id)
     requirements = deterministic_requirements(opp, evidence)
     ai = settings_summary(settings)
     mode = "deterministic"
@@ -142,7 +145,23 @@ def opportunity_requirements(settings: Settings, payload: dict[str, Any]) -> dic
         result="success" if mode == "ai" else "fallback",
         message=warning or "Requirements assist completed.",
     )
-    return {"ok": True, "mode": mode, "provider": provider, "warning": warning, "requirements": requirements, "aiNotes": ai_notes, "ai": ai}
+    source_facts = [
+        str(item.get("sourceExcerpt") or item.get("snippet") or "")[:260]
+        for item in evidence[:6]
+        if item.get("sourceExcerpt") or item.get("snippet")
+    ]
+    return {
+        "ok": True,
+        "mode": mode,
+        "provider": provider,
+        "warning": warning,
+        "requirements": requirements,
+        "sourceFacts": source_facts,
+        "businessAssumptions": [str(opp.get("fitReason") or "Requirements are inferred from available report context.")],
+        "aiRecommendations": ["Confirm extracted requirements against the authoritative solicitation before proposal use."],
+        "aiNotes": ai_notes,
+        "ai": ai,
+    }
 
 
 def _has_text(terms: tuple[str, ...], *values: Any) -> bool:
@@ -195,7 +214,19 @@ def deterministic_gap_analysis(opp: dict[str, Any], evidence: list[dict[str, Any
 
     if not gaps:
         gaps.append(_gap("low", "No major deterministic gaps found", "Available report data does not show obvious blockers.", "Review source attachments manually before final bid/no-bid.", "Gap assist"))
-    return {"gaps": gaps[:8], "strengths": strengths[:5], "sources": sources, "requirements": requirements}
+    return {
+        "gaps": gaps[:8],
+        "strengths": strengths[:5],
+        "sources": sources,
+        "requirements": requirements,
+        "sourceFacts": [
+            str(item.get("sourceExcerpt") or item.get("snippet") or "")[:260]
+            for item in evidence[:6]
+            if item.get("sourceExcerpt") or item.get("snippet")
+        ],
+        "businessAssumptions": strengths[:5],
+        "aiRecommendations": [item["action"] for item in gaps[:8]],
+    }
 
 
 def opportunity_gaps(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
@@ -206,7 +237,7 @@ def opportunity_gaps(settings: Settings, payload: dict[str, Any]) -> dict[str, A
     opp = _latest_match(settings, notice_id)
     if not opp:
         raise ValueError("Opportunity not found in latest report")
-    evidence = store.evidence_snippets(notice_id)
+    evidence = store.evidence_citations(notice_id)
     analysis = deterministic_gap_analysis(opp, evidence)
     ai = settings_summary(settings)
     mode = "deterministic"
@@ -242,7 +273,18 @@ def opportunity_gaps(settings: Settings, payload: dict[str, Any]) -> dict[str, A
         result="success" if mode == "ai" else "fallback",
         message=warning or "Gap assist completed.",
     )
-    return {"ok": True, "mode": mode, "provider": provider, "warning": warning, "analysis": analysis, "aiNotes": ai_notes, "ai": ai}
+    return {
+        "ok": True,
+        "mode": mode,
+        "provider": provider,
+        "warning": warning,
+        "analysis": analysis,
+        "sourceFacts": analysis.get("sourceFacts", []),
+        "businessAssumptions": analysis.get("businessAssumptions", []),
+        "aiRecommendations": analysis.get("aiRecommendations", []),
+        "aiNotes": ai_notes,
+        "ai": ai,
+    }
 
 
 def _bullet_lines(items: list[dict[str, Any]], fallback: str) -> str:
@@ -368,7 +410,7 @@ def generate_subcontractor_proposal_templates(settings: Settings, payload: dict[
         raise ValueError("Subcontractor templates require a subcontractor proposal workspace")
     if not proposal:
         proposal = store.create_proposal(notice_id, {"noticeId": notice_id, "title": opp.get("title") or notice_id, "role": "subcontractor"})
-    evidence = store.evidence_snippets(notice_id)
+    evidence = store.evidence_citations(notice_id)
     generated: list[dict[str, Any]] = []
     existing = store.proposal_artifacts(notice_id)
     by_title = {str(item.get("title") or ""): item for item in existing}
@@ -406,7 +448,7 @@ def generate_prime_proposal_templates(settings: Settings, payload: dict[str, Any
         raise ValueError("Prime templates require a prime proposal workspace")
     if not proposal:
         proposal = store.create_proposal(notice_id, {"noticeId": notice_id, "title": opp.get("title") or notice_id, "role": "prime"})
-    evidence = store.evidence_snippets(notice_id)
+    evidence = store.evidence_citations(notice_id)
     generated: list[dict[str, Any]] = []
     existing = store.proposal_artifacts(notice_id)
     by_title = {str(item.get("title") or ""): item for item in existing}
@@ -450,7 +492,7 @@ def _record_ai_audit(settings: Settings, *, notice_id: str, action: str, mode: s
 
 def deterministic_summary(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
     text, sources = _source_text(opp, evidence)
-    evidence_bullets = [str(item.get("snippet") or "")[:260] for item in evidence[:5] if item.get("snippet")]
+    evidence_bullets = [str(item.get("sourceExcerpt") or item.get("snippet") or "")[:260] for item in evidence[:5] if item.get("sourceExcerpt") or item.get("snippet")]
     overview_parts = _sentences(text, 2) or [str(opp.get("title") or "Opportunity summary is not available.")]
     fit = str(opp.get("fitReason") or "Review capability, NAICS/PSC, set-aside, deadline, and parsed document evidence.")
     action = str(opp.get("nextAction") or opp.get("workflowNextAction") or "Review the opportunity and confirm bid/no-bid posture.")
@@ -461,6 +503,9 @@ def deterministic_summary(opp: dict[str, Any], evidence: list[dict[str, Any]]) -
         "recommendedAction": action,
         "evidence": evidence_bullets,
         "sources": sources,
+        "sourceFacts": evidence_bullets,
+        "businessAssumptions": [fit],
+        "aiRecommendations": [action],
     }
 
 
@@ -472,7 +517,7 @@ def opportunity_summary(settings: Settings, payload: dict[str, Any]) -> dict[str
     opp = _latest_match(settings, notice_id)
     if not opp:
         raise ValueError("Opportunity not found in latest report")
-    evidence = store.evidence_snippets(notice_id)
+    evidence = store.evidence_citations(notice_id)
     base = deterministic_summary(opp, evidence)
     ai = settings_summary(settings)
     mode = "deterministic"
