@@ -281,6 +281,10 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert "iconLabel('check','Saved')" in html
     assert '/api/search-reference/delete' in html
     assert 'manual-search-form' in html
+    assert 'Add External Opportunity' in html
+    assert 'external-intake-form' in html
+    assert '/api/manual-add' in html
+    assert 'Added. Reloading cached report...' in html
     assert 'manual-field-setaside' in html
     assert 'id="manual-clear"' in html
     assert 'Manual search fields cleared.' in html
@@ -371,6 +375,7 @@ def test_report_writes_csv_export_and_toolbar_link(tmp_path: Path):
     html = (tmp_path / "latest.html").read_text()
 
     assert "notice_id,title,agency" in csv_text
+    assert "source,source_name,estimated_value" in csv_text
     assert 'csv-1,"Security, Support",Example Agency' in csv_text
     assert (tmp_path / "latest.csv").exists()
     assert paths["latestCsvUrl"] == "https://sam-radar.example.test/reports/latest.csv"

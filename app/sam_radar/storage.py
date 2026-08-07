@@ -1497,6 +1497,8 @@ class Store:
         if not notice_id:
             raise ValueError("noticeId is required")
         now = utc_now()
+        source = clean_text(opp.get("source") or "manual-search", 80)
+        reason = "Added from manual external intake" if source == "manual-external" or opp.get("manualExternal") else "Added from manual SAM search"
         with self.connect() as conn:
             duplicate = conn.execute(
                 """
@@ -1517,13 +1519,13 @@ class Store:
                     notice_id,
                     clean_text(opp.get("title"), 500),
                     clean_text(opp.get("url") or opp.get("uiLink"), 1000),
-                    clean_text(opp.get("source") or "manual-search", 80),
+                    source,
                     json.dumps(opp, sort_keys=True),
                     now,
                 ),
             )
-            self._add_event(conn, notice_id, "manual_tracked", "", "manual-search", "Added from manual SAM search", now)
-        return self.set_workflow(notice_id, {"status": "reviewing", "decisionReason": "Added from manual SAM search"})
+            self._add_event(conn, notice_id, "manual_tracked", "", source, reason, now)
+        return self.set_workflow(notice_id, {"status": "reviewing", "decisionReason": reason})
 
     def record_notification_once(self, notice_id: str, notification_type: str, notification_key: str) -> bool:
         now = utc_now()

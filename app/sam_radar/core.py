@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import hashlib
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .ai_assist import (
     generate_prime_proposal_templates,
@@ -158,6 +160,158 @@ def _current_report_ids(settings: Settings) -> set[str]:
     except Exception:  # noqa: BLE001
         return set()
     return {str(match.get("noticeId")) for match in data.get("matches", []) if match.get("noticeId")}
+
+
+def _clean_manual_text(value: object, limit: int = 1000) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:limit]
+
+
+def _normalize_manual_url(value: object) -> str:
+    url = _clean_manual_text(value, 1000)
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.netloc:
+        return url
+    if "." in url and " " not in url:
+        return f"https://{url}"
+    return url
+
+
+def _manual_notice_id(payload: dict) -> str:
+    explicit = _clean_manual_text(payload.get("noticeId") or payload.get("notice_id"), 200)
+    if explicit:
+        return explicit
+    url = _normalize_manual_url(payload.get("sourceUrl") or payload.get("url") or payload.get("uiLink"))
+    if url:
+        fingerprint = f"url:{url.lower().rstrip('/')}"
+    else:
+        parts = [
+            _clean_manual_text(payload.get("title"), 500).lower(),
+            _clean_manual_text(payload.get("organization") or payload.get("agency"), 300).lower(),
+            _clean_manual_text(payload.get("responseDeadline") or payload.get("dueDate"), 80).lower(),
+        ]
+        fingerprint = "manual:" + "|".join(parts)
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
+    return f"manual-{digest}"
+
+
+def _manual_opportunity_payload(payload: dict) -> dict:
+    title = _clean_manual_text(payload.get("title"), 500)
+    source_url = _normalize_manual_url(payload.get("sourceUrl") or payload.get("url") or payload.get("uiLink"))
+    source_name = _clean_manual_text(payload.get("sourceName") or payload.get("source") or payload.get("sourceType") or "External source", 120)
+    context = _clean_manual_text(payload.get("notes") or payload.get("context") or payload.get("fitReason"), 2000)
+    organization = _clean_manual_text(payload.get("organization") or payload.get("agency") or payload.get("customer"), 500)
+    if not title:
+        raise ValueError("Title is required")
+    if not any([source_url, source_name, context, organization]):
+        raise ValueError("Add a source URL, source name, customer/agency, or context note")
+    today = dt.datetime.now(dt.UTC).date().isoformat()
+    notice_id = _manual_notice_id({**payload, "title": title, "url": source_url, "organization": organization})
+    try:
+        score = max(0, min(int(payload.get("score")), 10)) if payload.get("score") not in (None, "") else 0
+    except (TypeError, ValueError):
+        score = 0
+    recommendation = _clean_manual_text(payload.get("recommendation") or payload.get("priority") or "Review", 80)
+    reasons = payload.get("reasons") if isinstance(payload.get("reasons"), list) else []
+    reasons = [_clean_manual_text(reason, 240) for reason in reasons if _clean_manual_text(reason, 240)]
+    if source_name:
+        reasons.insert(0, f"manual source: {source_name}")
+    if context:
+        reasons.append(context)
+    return {
+        "noticeId": notice_id,
+        "title": title,
+        "type": _clean_manual_text(payload.get("type") or payload.get("noticeType") or "External Opportunity", 120),
+        "postedDate": _clean_manual_text(payload.get("postedDate") or payload.get("discoveredDate") or today, 80),
+        "responseDeadline": _clean_manual_text(payload.get("responseDeadline") or payload.get("dueDate") or "", 120),
+        "naicsCode": _clean_manual_text(payload.get("naicsCode") or payload.get("naics"), 80),
+        "classificationCode": _clean_manual_text(payload.get("classificationCode") or payload.get("psc"), 80),
+        "setAsideCode": _clean_manual_text(payload.get("setAsideCode") or payload.get("setAside"), 80),
+        "setAside": _clean_manual_text(payload.get("setAside") or payload.get("setAsideCode"), 160),
+        "organization": organization or "External source",
+        "url": source_url,
+        "uiLink": source_url,
+        "source": "manual-external",
+        "sourceName": source_name,
+        "sourceUrl": source_url,
+        "manualExternal": True,
+        "manualTracked": True,
+        "estimatedValue": _clean_manual_text(payload.get("estimatedValue") or payload.get("value"), 120),
+        "owner": _clean_manual_text(payload.get("owner") or payload.get("workflowOwner"), 120),
+        "workflowOwner": _clean_manual_text(payload.get("workflowOwner") or payload.get("owner"), 120),
+        "score": score,
+        "recommendation": recommendation,
+        "reasons": reasons or ["manual external intake"],
+        "fitReason": context or f"Manually added from {source_name}.",
+        "nextAction": _clean_manual_text(
+            payload.get("nextAction") or "Review source details, confirm fit, and decide pursue/monitor/no-bid.",
+            500,
+        ),
+    }
+
+
+def _attach_workflow_context(store: Store, matches: list[dict]) -> None:
+    notice_ids = [str(match.get("noticeId")) for match in matches if match.get("noticeId")]
+    status_map = store.status_map(notice_ids)
+    proposal_map = store.proposal_map(notice_ids)
+    proposal_documents_map = store.proposal_document_map(notice_ids)
+    proposal_artifact_map = store.proposal_artifact_map(notice_ids)
+    for match in matches:
+        notice_id = str(match.get("noticeId") or "")
+        workflow = status_map.get(notice_id) or store.get_status(notice_id)
+        match["workflowStatus"] = workflow["status"]
+        match["workflowNotes"] = workflow["notes"]
+        match["workflowPriority"] = workflow.get("priority", "normal")
+        match["workflowOwner"] = workflow.get("owner", "")
+        match["workflowNextAction"] = workflow.get("nextAction", "")
+        match["workflowFollowUpAt"] = workflow.get("followUpAt", "")
+        match["workflowDecisionReason"] = workflow.get("decisionReason", "")
+        match["workflowNoBidReason"] = workflow.get("noBidReason", "")
+        match["workflowNoBidDetail"] = workflow.get("noBidDetail", "")
+        match["workflowDocuments"] = workflow.get("documents", [])
+        match["workflowEvents"] = workflow.get("events", [])
+        match["workflowUpdatedAt"] = workflow["updatedAt"]
+        match["proposal"] = proposal_map.get(notice_id) or {}
+        match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
+        match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
+        match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
+
+
+def rebuild_report_from_cache(settings: Settings) -> dict:
+    profile = load_business_profile(settings.profile_path)
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    latest = settings.reports_dir / "latest.json"
+    payload: dict = {"matches": [], "postedFrom": "", "postedTo": "", "errors": []}
+    if latest.exists():
+        try:
+            cached = json.loads(latest.read_text() or "{}")
+            summary = cached.get("summary") or {}
+            payload = {
+                "matches": [
+                    dict(match)
+                    for match in (cached.get("matches") or [])
+                    if not (match.get("manualTracked") or match.get("manualExternal"))
+                ],
+                "postedFrom": summary.get("postedFrom") or "",
+                "postedTo": summary.get("postedTo") or "",
+                "errors": cached.get("errors") or [],
+            }
+        except Exception:  # noqa: BLE001
+            payload = {"matches": [], "postedFrom": "", "postedTo": "", "errors": ["cached report could not be read"]}
+    matches = payload.get("matches") or []
+    match_ids = {str(match.get("noticeId") or "") for match in matches}
+    manual_matches = [opp for opp in store.manual_tracked_opportunities() if str(opp.get("noticeId") or "") not in match_ids]
+    if manual_matches:
+        matches.extend(manual_matches)
+    payload["matches"] = matches
+    payload["totalMatches"] = len(matches)
+    _attach_workflow_context(store, matches)
+    unseen = store.unseen(matches)
+    report = build_report_payload(payload, profile, settings, unseen=unseen)
+    paths = write_reports(report, settings)
+    return {"ok": True, "summary": report["summary"], "report": paths, "newMatches": len(unseen), "cached": True}
 
 
 
@@ -380,11 +534,18 @@ def _search_with_active_profiles(settings: Settings, profile: BusinessProfile, s
 
 def add_manual_opportunity(settings: Settings, opp: dict) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
+    manual_external = not str(opp.get("noticeId") or opp.get("notice_id") or "").strip() or bool(opp.get("manualExternal"))
+    if manual_external:
+        opp = _manual_opportunity_payload(opp)
     notice_id = str(opp.get("noticeId") or "")
     if notice_id in _current_report_ids(settings) or store.is_tracked(notice_id):
         return {"ok": False, "duplicate": True, "error": "Already tracked"}
     workflow = store.add_manual_tracked(opp)
-    return {"ok": True, "workflow": workflow}
+    owner = _clean_manual_text(opp.get("workflowOwner") or opp.get("owner"), 120)
+    if owner:
+        workflow = store.set_workflow(notice_id, {"owner": owner})
+    report = rebuild_report_from_cache(settings)
+    return {"ok": True, "workflow": workflow, "opportunity": opp, "report": report.get("report"), "cached": True}
 
 
 def create_proposal(settings: Settings, payload: dict) -> dict:
