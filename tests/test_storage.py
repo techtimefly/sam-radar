@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from sam_radar.storage import Store
@@ -570,3 +571,334 @@ def test_ai_audit_events_store_metadata_without_prompt_text(tmp_path: Path):
     assert events[0]["external"] is False
     assert "prompt" not in events[0]
     assert "this should never" not in str(events[0])
+
+
+def test_compliance_migration_crud_same_notice_and_review_states(tmp_path: Path):
+    db = tmp_path / "sam-radar.sqlite3"
+    Store(db)
+    store = Store(db)
+    doc = store.add_proposal_document({"noticeId": "opp-comp-1", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    citation = store.create_evidence_citation(
+        {
+            "noticeId": "opp-comp-1",
+            "documentId": doc["id"],
+            "pageSection": "L.3",
+            "sourceExcerpt": "Offeror shall submit a staffing plan.",
+            "extractedClaim": "Staffing plan required.",
+        }
+    )
+    revision = store.capture_opportunity_revision({"noticeId": "opp-comp-1", "title": "A", "responseDeadline": "2026-08-20T12:00:00+00:00"})["revision"]
+    other_doc = store.add_proposal_document({"noticeId": "opp-comp-2", "sourceType": "url", "source": "https://example.test/other.txt"})
+    other_citation = store.create_evidence_citation({"noticeId": "opp-comp-2", "documentId": other_doc["id"], "sourceExcerpt": "Other"})
+    other_revision = store.capture_opportunity_revision({"noticeId": "opp-comp-2", "title": "B"})["revision"]
+
+    req = store.create_compliance_requirement(
+        {
+            "noticeId": "opp-comp-1",
+            "citationId": citation["id"],
+            "revisionId": revision["revisionId"],
+            "category": "Submission",
+            "requirementText": "Submit a staffing plan.",
+            "mandatoryState": "mandatory",
+            "owner": "Capture Lead",
+            "dueDate": "2026-08-18",
+            "responseLocation": "Volume I",
+            "status": "open",
+            "notes": "Draft outline.",
+            "provenance": "manual",
+            "generationMetadata": {"source": "test"},
+        }
+    )
+
+    assert req["noticeId"] == "opp-comp-1"
+    assert req["citationId"] == citation["id"]
+    assert req["verificationState"] == "needs-review"
+    assert req["invalidated"] is False
+    assert req["generationMetadata"] == {"source": "test"}
+    assert store.compliance_requirements("opp-comp-1")[0]["requirementText"] == "Submit a staffing plan."
+
+    edited = store.update_compliance_requirement(req["id"], {"noticeId": "opp-comp-1", "requirementText": "Submit a revised staffing plan.", "status": "in-progress"})
+    assert edited["humanEdited"] is True
+    assert edited["status"] == "in-progress"
+
+    verified = store.verify_compliance_requirement(req["id"], "verified", "Reviewer")
+    assert verified["verificationState"] == "verified"
+    assert verified["verifier"] == "Reviewer"
+    assert verified["verifiedAt"]
+
+    for payload, expected in [
+        ({"noticeId": "opp-comp-1", "citationId": other_citation["id"], "requirementText": "Bad"}, "citationId does not belong to noticeId"),
+        ({"noticeId": "opp-comp-1", "revisionId": other_revision["revisionId"], "requirementText": "Bad"}, "revisionId does not belong to noticeId"),
+    ]:
+        try:
+            store.create_compliance_requirement(payload)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"Expected {expected}")
+
+    for payload, expected in [
+        ({"noticeId": "opp-comp-2"}, "noticeId does not match requirement"),
+        ({"noticeId": "opp-comp-1", "citationId": other_citation["id"]}, "citationId does not belong to noticeId"),
+        ({"noticeId": "opp-comp-1", "revisionId": other_revision["revisionId"]}, "revisionId does not belong to noticeId"),
+    ]:
+        try:
+            store.update_compliance_requirement(req["id"], payload)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"Expected {expected}")
+
+    with store.connect() as conn:
+        tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"compliance_requirements", "compliance_requirement_lineage"} <= tables
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_compliance_generation_idempotency_review_preservation_and_invalidation_precision(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    revision_a = store.capture_opportunity_revision({"noticeId": "opp-gen-1", "title": "A", "responseDeadline": "2026-08-20T12:00:00+00:00"})["revision"]
+    doc = store.add_proposal_document({"noticeId": "opp-gen-1", "sourceType": "url", "source": "https://example.test/pws.txt", "label": "PWS"})
+    citation = store.create_evidence_citation(
+        {
+            "noticeId": "opp-gen-1",
+            "documentId": doc["id"],
+            "revisionId": revision_a["revisionId"],
+            "pageSection": "C.1",
+            "sourceExcerpt": "The contractor shall provide weekly status reports. The contractor must submit a quality plan.",
+            "extractedClaim": "Weekly reports and a quality plan are required.",
+            "verificationState": "verified",
+        }
+    )
+    rejected = store.create_evidence_citation(
+        {
+            "noticeId": "opp-gen-1",
+            "documentId": doc["id"],
+            "revisionId": revision_a["revisionId"],
+            "sourceExcerpt": "The contractor may attend an optional site visit.",
+            "extractedClaim": "Optional site visit.",
+            "verificationState": "rejected",
+        }
+    )
+
+    first = store.generate_compliance_requirements("opp-gen-1")
+    second = store.generate_compliance_requirements("opp-gen-1")
+
+    assert len(first["requirements"]) == 1
+    assert len(second["requirements"]) == 1
+    assert first["createdCount"] == 1
+    assert second["createdCount"] == 0
+    assert first["requirements"][0]["citationId"] == citation["id"]
+    assert all(item["citationId"] != rejected["id"] for item in first["requirements"])
+
+    req = store.update_compliance_requirement(
+        first["requirements"][0]["id"],
+        {"noticeId": "opp-gen-1", "requirementText": "Human reviewed status reports.", "notes": "Keep this.", "owner": "Lead"},
+    )
+    verified = store.verify_compliance_requirement(req["id"], "verified", "Reviewer")
+    regenerated = store.generate_compliance_requirements("opp-gen-1")["requirements"][0]
+
+    assert regenerated["id"] == req["id"]
+    assert regenerated["requirementText"] == "Human reviewed status reports."
+    assert regenerated["notes"] == "Keep this."
+    assert regenerated["owner"] == "Lead"
+    assert regenerated["verificationState"] == "verified"
+    assert regenerated["verifiedAt"] == verified["verifiedAt"]
+
+    unscoped_citation = store.create_evidence_citation({"noticeId": "opp-gen-1", "documentId": doc["id"], "sourceExcerpt": "Unscoped citation."})
+    unscoped_req = store.create_compliance_requirement({"noticeId": "opp-gen-1", "citationId": unscoped_citation["id"], "requirementText": "Review unscoped citation manually."})
+
+    store.capture_opportunity_revision({"noticeId": "opp-gen-1", "title": "A", "responseDeadline": "2026-08-21T12:00:00+00:00"})
+    unchanged = store.compliance_requirement(req["id"])
+    assert unchanged["invalidated"] is False
+
+    store.capture_opportunity_revision({"noticeId": "opp-gen-1", "title": "A", "responseDeadline": "2026-08-21T12:00:00+00:00", "description": "Changed requirements"})
+    invalidated = store.compliance_requirement(req["id"])
+    assert invalidated["invalidated"] is True
+    assert "material revision" in invalidated["invalidationReason"]
+    assert store.compliance_requirement(unscoped_req["id"])["invalidated"] is False
+
+
+def test_compliance_generation_deduplicates_normalized_citations_without_row_churn(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-gen-dupe", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    first_citation = store.create_evidence_citation(
+        {
+            "noticeId": "opp-gen-dupe",
+            "documentId": doc["id"],
+            "pageSection": "L.1",
+            "sourceExcerpt": "Offeror shall submit a management plan.",
+            "extractedClaim": "Offeror shall submit a management plan.",
+        }
+    )
+    store.create_evidence_citation(
+        {
+            "noticeId": "opp-gen-dupe",
+            "documentId": doc["id"],
+            "pageSection": "L.1 copy",
+            "sourceExcerpt": "  Offeror   shall submit a management plan.  ",
+            "extractedClaim": "Offeror shall submit a management plan.",
+        }
+    )
+
+    first = store.generate_compliance_requirements("opp-gen-dupe")
+    second = store.generate_compliance_requirements("opp-gen-dupe")
+
+    assert first["createdCount"] == 1
+    assert first["updatedCount"] == 0
+    assert second["createdCount"] == 0
+    assert second["updatedCount"] == 0
+    assert len(second["requirements"]) == 1
+    assert second["requirements"][0]["citationId"] == first_citation["id"]
+    assert second["requirements"][0]["updatedAt"] == first["requirements"][0]["updatedAt"]
+
+
+def test_compliance_generation_is_concurrency_safe_and_preserves_review_state(tmp_path: Path):
+    db = tmp_path / "sam-radar.sqlite3"
+    store = Store(db)
+    doc = store.add_proposal_document({"noticeId": "opp-gen-race", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    store.create_evidence_citation(
+        {
+            "noticeId": "opp-gen-race",
+            "documentId": doc["id"],
+            "sourceExcerpt": "Contractor shall submit monthly status reports.",
+            "extractedClaim": "Contractor shall submit monthly status reports.",
+        }
+    )
+
+    def generate() -> dict:
+        return Store(db).generate_compliance_requirements("opp-gen-race")
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: generate(), range(4)))
+
+    requirements = store.compliance_requirements("opp-gen-race")
+    assert all(result["ok"] for result in results)
+    assert len(requirements) == 1
+
+    reviewed = store.update_compliance_requirement(requirements[0]["id"], {"noticeId": "opp-gen-race", "notes": "Keep review", "owner": "Lead"})
+    verified = store.verify_compliance_requirement_for_notice(reviewed["id"], "opp-gen-race", "verified", "Reviewer")
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: generate(), range(4)))
+
+    after = store.compliance_requirements("opp-gen-race")
+    assert len(after) == 1
+    assert after[0]["id"] == reviewed["id"]
+    assert after[0]["notes"] == "Keep review"
+    assert after[0]["owner"] == "Lead"
+    assert after[0]["verificationState"] == "verified"
+    assert after[0]["verifiedAt"] == verified["verifiedAt"]
+
+
+def test_compliance_storage_update_requires_matching_notice_id(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    req = store.create_compliance_requirement({"noticeId": "opp-update-scope", "requirementText": "Submit a plan."})
+
+    for payload, expected in [
+        ({"requirementText": "Changed without scope"}, "noticeId is required"),
+        ({"noticeId": "other-notice", "requirementText": "Changed across scope"}, "noticeId does not match requirement"),
+    ]:
+        try:
+            store.update_compliance_requirement(req["id"], payload)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"Expected {expected}")
+
+    assert store.compliance_requirement(req["id"])["requirementText"] == "Submit a plan."
+
+
+def test_compliance_merge_split_lineage_and_exports_escape(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-export-1", "sourceType": "url", "source": "https://example.test/pws.csv", "label": "PWS"})
+    cite1 = store.create_evidence_citation({"noticeId": "opp-export-1", "documentId": doc["id"], "pageSection": "A", "sourceExcerpt": "Contractor shall provide \"reports\".", "extractedClaim": "Reports."})
+    cite2 = store.create_evidence_citation({"noticeId": "opp-export-1", "documentId": doc["id"], "pageSection": "B", "sourceExcerpt": "Contractor must provide training.", "extractedClaim": "Training."})
+    req1 = store.create_compliance_requirement({"noticeId": "opp-export-1", "citationId": cite1["id"], "category": "Submission", "requirementText": "Provide \"reports\", weekly", "status": "open"})
+    req2 = store.create_compliance_requirement({"noticeId": "opp-export-1", "citationId": cite2["id"], "category": "Staffing", "requirementText": "Provide training", "status": "open"})
+
+    merged = store.merge_compliance_requirements("opp-export-1", [req1["id"], req2["id"]], {"requirementText": "Provide reports and training", "category": "Submission"})
+    assert merged["requirement"]["parentRequirementIds"] == [req1["id"], req2["id"]]
+    assert {item["status"] for item in store.compliance_requirements("opp-export-1") if item["id"] in {req1["id"], req2["id"]}} == {"merged"}
+
+    split = store.split_compliance_requirement(
+        "opp-export-1",
+        merged["requirement"]["id"],
+        [
+            {"requirementText": "Provide reports", "category": "Submission"},
+            {"requirementText": "Provide training", "category": "Staffing"},
+        ],
+    )
+    assert [item["parentRequirementIds"] for item in split["requirements"]] == [[merged["requirement"]["id"]], [merged["requirement"]["id"]]]
+    assert store.compliance_requirement(merged["requirement"]["id"])["status"] == "split"
+
+    csv_text = store.export_compliance_csv("opp-export-1")
+    md_text = store.export_compliance_markdown("opp-export-1")
+    assert '"Provide ""reports"", weekly"' in csv_text
+    assert "Source: citation #" in csv_text
+    assert "# Compliance Matrix - opp-export-1" in md_text
+    assert "\\|reports\\|" in store.export_compliance_markdown("opp-export-1", requirements=[{**req1, "requirementText": "Need |reports|"}])
+    assert "APP_WRITE_TOKEN" not in csv_text + md_text
+
+    markdown = store.export_compliance_markdown(
+        "opp-export-1",
+        requirements=[
+            {
+                **req1,
+                "category": "Line\rCategory",
+                "requirementText": "First\r\nSecond\rThird\nFourth",
+                "invalidationReason": "Bad\r\nsource",
+                "invalidated": True,
+            }
+        ],
+    )
+    assert "First Second Third Fourth" in markdown
+    assert "Line Category" in markdown
+    assert "Bad source" in markdown
+    assert "\r" not in markdown
+
+
+def test_compliance_split_is_atomic_and_exports_mitigate_formula_injection(tmp_path: Path):
+    store = Store(tmp_path / "sam-radar.sqlite3")
+    doc = store.add_proposal_document({"noticeId": "opp-atomic-1", "sourceType": "url", "source": "https://example.test/pws.txt"})
+    citation = store.create_evidence_citation({"noticeId": "opp-atomic-1", "documentId": doc["id"], "sourceExcerpt": "Contractor shall submit reports."})
+    other_doc = store.add_proposal_document({"noticeId": "opp-atomic-2", "sourceType": "url", "source": "https://example.test/other.txt"})
+    other_citation = store.create_evidence_citation({"noticeId": "opp-atomic-2", "documentId": other_doc["id"], "sourceExcerpt": "Other"})
+    req = store.create_compliance_requirement({"noticeId": "opp-atomic-1", "citationId": citation["id"], "requirementText": "Submit reports"})
+
+    try:
+        store.split_compliance_requirement(
+            "opp-atomic-1",
+            req["id"],
+            [
+                {"requirementText": "Submit monthly reports"},
+                {"citationId": other_citation["id"], "requirementText": "Use another notice citation"},
+            ],
+        )
+    except ValueError as exc:
+        assert "citationId does not belong to noticeId" in str(exc)
+    else:
+        raise AssertionError("Expected split with cross-notice citation to fail")
+
+    remaining = store.compliance_requirements("opp-atomic-1")
+    assert [item["id"] for item in remaining] == [req["id"]]
+    assert remaining[0]["status"] == "open"
+    with store.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM compliance_requirement_lineage").fetchone()[0] == 0
+
+    csv_text = store.export_compliance_csv(
+        "opp-atomic-1",
+        requirements=[
+            {
+                **req,
+                "category": "=cmd|' /C calc'!A0",
+                "requirementText": "+SUM(1,2)",
+                "owner": "@owner",
+                "notes": "-note",
+            }
+        ],
+    )
+    assert "'=cmd|' /C calc'!A0" in csv_text
+    assert "'+SUM(1,2)" in csv_text
+    assert "'@owner" in csv_text
+    assert "'-note" in csv_text

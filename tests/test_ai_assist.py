@@ -218,6 +218,27 @@ def test_deterministic_requirements_groups_source_aware_items():
     assert any(item["category"] == "source-fact" for items in result.values() for item in items)
 
 
+def test_deterministic_requirements_uses_compliance_matrix_as_source_fact():
+    opp = {
+        "title": "CMMC Support",
+        "complianceRequirements": [
+            {
+                "category": "Submission",
+                "requirementText": "Offeror must submit a compliance matrix with the proposal.",
+                "status": "open",
+                "verificationState": "verified",
+            }
+        ],
+    }
+
+    result = deterministic_requirements(opp, [])
+    submission = result["submissionInstructions"]
+
+    assert any("submit a compliance matrix" in item["text"] for item in submission)
+    assert any(item["source"].startswith("Compliance matrix: Submission") for item in submission)
+    assert all(item["category"] == "source-fact" for item in submission)
+
+
 def test_opportunity_requirements_falls_back_without_ai(tmp_path: Path):
     reports = tmp_path / "reports"
     data = tmp_path / "data"

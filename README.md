@@ -143,6 +143,14 @@ Read endpoints are available under `/api/evidence/{noticeId}`. Mutations under `
 
 Summary, Requirements, and Gap assist outputs use citation records when present and separate source facts, business assumptions, and AI recommendations. The deterministic path remains available when AI is disabled or unavailable, and prompts/source text are not stored in the local AI audit log.
 
+## Compliance Matrix
+
+SAM Radar stores a local compliance matrix per opportunity in SQLite. Requirements can be created manually, generated deterministically from non-rejected evidence citations, edited, verified, rejected, merged, split, and exported. Generated requirements preserve human edits and verification review state on later regeneration. Requirements linked to stale citations are invalidated only when their own citation predates a material opportunity revision.
+
+Read `/api/compliance/{noticeId}` to list requirements. Mutations under `/api/compliance/add`, `/api/compliance/update`, `/api/compliance/verify`, `/api/compliance/reject`, `/api/compliance/generate`, `/api/compliance/merge`, and `/api/compliance/split` require `APP_WRITE_TOKEN`. Export `/api/compliance-export/{noticeId}.csv` or `/api/compliance-export/{noticeId}.md` for a safe CSV or Markdown matrix.
+
+The report UI shows filters for category, status, mandatory state, verification state, invalidation, and missing citation; inline row edits; verify/reject mark actions; merge/split controls; generation from evidence; and CSV/Markdown export links. Summary, Requirements, and Gap assist include compliance matrix context as source facts. See `docs/compliance-matrix.md` for schema, endpoints, safety rules, and limitations.
+
 ## Amendment Intelligence
 
 SAM Radar captures normalized immutable opportunity and attachment metadata snapshots during SAM.gov refresh. It detects material changes for deadlines, cancellation/status, notice type, set-aside, NAICS, PSC, description, contacts, and attachments, then classifies impact as `critical`, `high`, `medium`, or `low`.
@@ -171,6 +179,7 @@ Slack and Telegram are optional. Configure either or both in `.env`. Daily diges
 - `docs/navigation-controls.md` documents sticky navigation, back-to-top, and board lane visibility controls.
 - `docs/design-system.md` documents report tokens, component primitives, accessibility, and responsive conventions.
 - `docs/evidence-citations.md` documents the SQLite evidence model, APIs, verification states, UI behavior, and AI assist boundaries.
+- `docs/compliance-matrix.md` documents the SQLite compliance model, endpoints, mark actions, merge/split, exports, invalidation, and AI assist boundaries.
 - `deploy/nginx/sam-radar.lan.conf` is an example nginx vhost.
 
 ## Local Development
@@ -195,6 +204,7 @@ sam-radar serve
 - v0.8: professional design system with tokens, reusable primitives, accessible feedback states, responsive density, and a Resources showcase
 - v0.9: evidence and citation foundation with durable source excerpts, verification workflow, and source-aware assist output
 - v0.10: amendment intelligence with immutable SAM.gov revision snapshots, material change detection, stale-evidence warnings, and review tasks
+- v0.11: compliance matrix with evidence-backed generation, review marks, merge/split lineage, stale-source invalidation, exports, and source-aware assist context
 - v1.0: stable self-hosted release
 
 ## Security Notes

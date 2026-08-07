@@ -277,6 +277,7 @@ def _attach_workflow_context(store: Store, matches: list[dict]) -> None:
         match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
         match["evidenceCitations"] = store.evidence_citations(notice_id)
+        match["complianceRequirements"] = store.compliance_requirements(notice_id)
         match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
     attach_amendment_context(store, matches)
 
@@ -759,6 +760,97 @@ def delete_evidence(settings: Settings, payload: dict) -> dict:
     return {"ok": True, "evidence": evidence, "items": store.evidence_citations(evidence["noticeId"])}
 
 
+def compliance_list(settings: Settings, notice_id: str) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "requirements": store.compliance_requirements(notice_id)}
+
+
+def add_compliance_requirement(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    requirement = store.create_compliance_requirement(payload)
+    return {"ok": True, "requirement": requirement, "requirements": store.compliance_requirements(requirement["noticeId"])}
+
+
+def update_compliance_requirement(settings: Settings, payload: dict) -> dict:
+    requirement_id = int(payload.get("requirementId") or payload.get("id") or 0)
+    if not requirement_id:
+        raise ValueError("requirementId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    requirement = store.update_compliance_requirement(requirement_id, payload)
+    return {"ok": True, "requirement": requirement, "requirements": store.compliance_requirements(requirement["noticeId"])}
+
+
+def verify_compliance_requirement(settings: Settings, payload: dict) -> dict:
+    requirement_id = int(payload.get("requirementId") or payload.get("id") or 0)
+    if not requirement_id:
+        raise ValueError("requirementId is required")
+    notice_id = str(payload.get("noticeId") or "").strip()
+    if not notice_id:
+        raise ValueError("noticeId is required")
+    state = str(payload.get("verificationState") or payload.get("state") or "verified")
+    verifier = str(payload.get("verifier") or "")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    requirement = store.verify_compliance_requirement_for_notice(requirement_id, notice_id, state, verifier)
+    return {"ok": True, "requirement": requirement, "requirements": store.compliance_requirements(requirement["noticeId"])}
+
+
+def reject_compliance_requirement(settings: Settings, payload: dict) -> dict:
+    requirement_id = int(payload.get("requirementId") or payload.get("id") or 0)
+    notice_id = str(payload.get("noticeId") or "").strip()
+    if not requirement_id or not notice_id:
+        raise ValueError("requirementId and noticeId are required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    requirement = store.reject_compliance_requirement(requirement_id, notice_id)
+    return {"ok": True, "requirement": requirement, "requirements": store.compliance_requirements(notice_id)}
+
+
+def generate_compliance_requirements(settings: Settings, payload: dict) -> dict:
+    notice_id = str(payload.get("noticeId") or payload.get("notice_id") or "").strip()
+    if not notice_id:
+        raise ValueError("noticeId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return store.generate_compliance_requirements(notice_id)
+
+
+def merge_compliance_requirements(settings: Settings, payload: dict) -> dict:
+    notice_id = str(payload.get("noticeId") or "").strip()
+    ids = payload.get("requirementIds") or payload.get("ids") or []
+    if not notice_id:
+        raise ValueError("noticeId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return store.merge_compliance_requirements(notice_id, ids, payload)
+
+
+def split_compliance_requirement(settings: Settings, payload: dict) -> dict:
+    notice_id = str(payload.get("noticeId") or "").strip()
+    requirement_id = int(payload.get("requirementId") or payload.get("id") or 0)
+    parts = payload.get("requirements") or payload.get("parts") or []
+    if not notice_id or not requirement_id:
+        raise ValueError("noticeId and requirementId are required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return store.split_compliance_requirement(notice_id, requirement_id, parts)
+
+
+def export_compliance_matrix(settings: Settings, notice_id: str, export_format: str) -> dict:
+    safe_notice_id = re.sub(r"[^A-Za-z0-9._-]+", "-", notice_id or "notice").strip(".-")[:120] or "notice"
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    if export_format == "csv":
+        return {
+            "ok": True,
+            "filename": f"{safe_notice_id}-compliance-matrix.csv",
+            "contentType": "text/csv; charset=utf-8",
+            "content": store.export_compliance_csv(notice_id),
+        }
+    if export_format == "md":
+        return {
+            "ok": True,
+            "filename": f"{safe_notice_id}-compliance-matrix.md",
+            "contentType": "text/markdown; charset=utf-8",
+            "content": store.export_compliance_markdown(notice_id),
+        }
+    raise ValueError("format must be csv or md")
+
+
 def _markdown_filename(value: str) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", value or "proposal-artifact").strip(".-")
     return (name[:120] or "proposal-artifact") + ".md"
@@ -865,6 +957,7 @@ def refresh_report(
         match["proposalDocuments"] = proposal_documents_map.get(notice_id, [])
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
         match["evidenceCitations"] = store.evidence_citations(notice_id)
+        match["complianceRequirements"] = store.compliance_requirements(notice_id)
         match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
     attach_amendment_context(store, matches)
     unseen = store.unseen(matches)
