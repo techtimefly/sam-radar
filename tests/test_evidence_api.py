@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sam_radar.cli import RadarHandler
 from sam_radar.config import Settings
+from sam_radar.storage import Store
 
 
 def _serve(settings: Settings):
@@ -64,6 +65,90 @@ def test_evidence_api_read_and_write_auth_boundary(tmp_path: Path):
         assert status == 200
         assert verified["evidence"]["verificationState"] == "verified"
         assert verified["evidence"]["verifier"] == "Lead"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_amendment_api_task_auth_and_cross_notice_integrity(tmp_path: Path):
+    settings = Settings(sam_gov_api_key="test", data_dir=tmp_path / "data", reports_dir=tmp_path / "reports", app_write_token="secret")
+    settings.reports_dir.mkdir()
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    rev = store.capture_opportunity_revision({"noticeId": "opp-api-amd", "title": "A", "responseDeadline": "2026-08-20T12:00:00+00:00"})["revision"]
+    server, base = _serve(settings)
+    try:
+        status, data = _json(f"{base}/api/amendments/opp-api-amd")
+        assert status == 200
+        assert data["amendments"]["summary"]["revisionCount"] == 1
+
+        try:
+            _json(f"{base}/api/amendments/task/create", {"noticeId": "opp-api-amd", "revisionId": rev["revisionId"]})
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        else:
+            raise AssertionError("Expected write without APP_WRITE_TOKEN to fail")
+
+        status, created = _json(
+            f"{base}/api/amendments/task/create",
+            {"noticeId": "opp-api-amd", "revisionId": rev["revisionId"], "assignee": "Lead", "status": "open"},
+            token="secret",
+        )
+        assert status == 200
+        assert created["task"]["assignee"] == "Lead"
+
+        status, deleted = _json(
+            f"{base}/api/amendments/task/delete",
+            {"noticeId": "opp-api-amd", "taskId": created["task"]["id"]},
+            token="secret",
+        )
+        assert status == 200
+        assert deleted["tasks"] == []
+
+        try:
+            _json(
+                f"{base}/api/amendments/task/update",
+                {"taskId": created["task"]["id"], "noticeId": "other", "status": "done"},
+                token="secret",
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:
+            raise AssertionError("Expected cross-notice update to fail")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_amendment_api_mark_reviewed_requires_token_and_updates_unread(tmp_path: Path):
+    settings = Settings(sam_gov_api_key="test", data_dir=tmp_path / "data", reports_dir=tmp_path / "reports", app_write_token="secret")
+    settings.reports_dir.mkdir()
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    store.capture_opportunity_revision({"noticeId": "opp-api-review", "title": "A", "responseDeadline": "2026-08-20T12:00:00+00:00"})
+    store.capture_opportunity_revision({"noticeId": "opp-api-review", "title": "A", "responseDeadline": "2026-08-12T12:00:00+00:00"})
+    change = store.amendment_changes("opp-api-review")[0]
+    server, base = _serve(settings)
+    try:
+        try:
+            _json(f"{base}/api/amendments/mark-reviewed", {"noticeId": "opp-api-review", "changeIds": [change["id"]]})
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        else:
+            raise AssertionError("Expected mark-reviewed without APP_WRITE_TOKEN to fail")
+
+        status, reviewed = _json(
+            f"{base}/api/amendments/mark-reviewed",
+            {"noticeId": "opp-api-review", "changeIds": [change["id"]]},
+            token="secret",
+        )
+        assert status == 200
+        assert reviewed["amendments"]["summary"]["unreadCount"] == 0
+
+        try:
+            _json(f"{base}/api/amendments/mark-reviewed", {"noticeId": "other", "changeIds": [change["id"]]}, token="secret")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:
+            raise AssertionError("Expected cross-notice mark-reviewed to fail")
     finally:
         server.shutdown()
         server.server_close()

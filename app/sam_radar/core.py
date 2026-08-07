@@ -278,6 +278,32 @@ def _attach_workflow_context(store: Store, matches: list[dict]) -> None:
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
         match["evidenceCitations"] = store.evidence_citations(notice_id)
         match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
+    attach_amendment_context(store, matches)
+
+
+def attach_amendment_context(store: Store, matches: list[dict]) -> None:
+    notice_ids: list[str] = []
+    for match in matches:
+        notice_id = str(match.get("noticeId") or "")
+        if not notice_id:
+            continue
+        if match.get("manualTracked") or match.get("manualExternal") or str(notice_id).startswith("manual-"):
+            match["amendmentSummary"] = {"revisionCount": 0, "changeCount": 0, "materialChangeCount": 0, "unreadCount": 0, "staleEvidenceCount": 0}
+            match["amendmentTimeline"] = []
+            match["staleEvidenceWarnings"] = {"count": 0, "items": []}
+            match["amendmentTasks"] = []
+            continue
+        store.capture_opportunity_revision(match)
+        notice_ids.append(notice_id)
+    for match in matches:
+        notice_id = str(match.get("noticeId") or "")
+        if not notice_id or notice_id not in notice_ids:
+            continue
+        match["amendmentSummary"] = store.amendment_summary(notice_id)
+        match["amendmentTimeline"] = store.amendment_changes(notice_id)
+        match["amendmentRevisions"] = store.opportunity_revisions(notice_id)
+        match["staleEvidenceWarnings"] = store.stale_evidence_warnings(notice_id)
+        match["amendmentTasks"] = store.amendment_tasks(notice_id)
 
 
 def rebuild_report_from_cache(settings: Settings) -> dict:
@@ -657,6 +683,47 @@ def evidence_list(settings: Settings, notice_id: str) -> dict:
     return {"ok": True, "evidence": store.evidence_citations(notice_id)}
 
 
+def amendment_timeline(settings: Settings, notice_id: str) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    return {"ok": True, "amendments": store.amendment_timeline(notice_id)}
+
+
+def create_amendment_task(settings: Settings, payload: dict) -> dict:
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    task = store.create_amendment_task(payload)
+    return {"ok": True, "task": task, "tasks": store.amendment_tasks(task["noticeId"])}
+
+
+def update_amendment_task(settings: Settings, payload: dict) -> dict:
+    task_id = int(payload.get("taskId") or payload.get("id") or 0)
+    if not task_id:
+        raise ValueError("taskId is required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    task = store.update_amendment_task(task_id, payload)
+    return {"ok": True, "task": task, "tasks": store.amendment_tasks(task["noticeId"])}
+
+
+def mark_amendments_reviewed(settings: Settings, payload: dict) -> dict:
+    notice_id = str(payload.get("noticeId") or payload.get("notice_id") or "").strip()
+    if not notice_id:
+        raise ValueError("noticeId is required")
+    raw_ids = payload.get("changeIds") if "changeIds" in payload else payload.get("change_ids")
+    change_ids = None if raw_ids in (None, "all") else list(raw_ids or [])
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    reviewed = store.mark_amendment_changes_reviewed(notice_id, change_ids)
+    return {"ok": True, "reviewed": reviewed, "amendments": store.amendment_timeline(notice_id)}
+
+
+def delete_amendment_task(settings: Settings, payload: dict) -> dict:
+    task_id = int(payload.get("taskId") or payload.get("id") or 0)
+    notice_id = str(payload.get("noticeId") or "")
+    if not task_id or not notice_id:
+        raise ValueError("taskId and noticeId are required")
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    task = store.delete_amendment_task(task_id, notice_id)
+    return {"ok": True, "task": task, "tasks": store.amendment_tasks(notice_id)}
+
+
 def add_evidence(settings: Settings, payload: dict) -> dict:
     store = Store(settings.data_dir / "sam-radar.sqlite3")
     evidence = store.create_evidence_citation(payload)
@@ -799,6 +866,7 @@ def refresh_report(
         match["evidenceSnippets"] = store.evidence_snippets(notice_id) if proposal_documents_map.get(notice_id) else []
         match["evidenceCitations"] = store.evidence_citations(notice_id)
         match["proposalArtifacts"] = proposal_artifact_map.get(notice_id, [])
+    attach_amendment_context(store, matches)
     unseen = store.unseen(matches)
     report = build_report_payload(payload, profile, settings, unseen=unseen)
     paths = write_reports(report, settings)

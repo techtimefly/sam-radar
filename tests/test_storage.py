@@ -256,12 +256,16 @@ def test_evidence_validation_rejects_missing_and_cross_notice_references(tmp_pat
     other_doc = store.add_proposal_document({"noticeId": "opp-ref-2", "sourceType": "url", "source": "https://example.test/ref-2.txt"})
     proposal = store.create_proposal("opp-ref-1", {"noticeId": "opp-ref-1", "role": "prime"})
     other_proposal = store.create_proposal("opp-ref-2", {"noticeId": "opp-ref-2", "role": "prime"})
+    revision = store.capture_opportunity_revision({"noticeId": "opp-ref-1", "title": "Reference 1"})["revision"]
+    other_revision = store.capture_opportunity_revision({"noticeId": "opp-ref-2", "title": "Reference 2"})["revision"]
 
     invalid_payloads = [
         ({"noticeId": "opp-ref-1", "documentId": 999_999, "sourceExcerpt": "x"}, "documentId does not exist"),
         ({"noticeId": "opp-ref-1", "documentId": other_doc["id"], "sourceExcerpt": "x"}, "documentId does not belong to noticeId"),
         ({"noticeId": "opp-ref-1", "proposalId": 999_999, "sourceExcerpt": "x"}, "proposalId does not exist"),
         ({"noticeId": "opp-ref-1", "proposalId": other_proposal["id"], "sourceExcerpt": "x"}, "proposalId does not belong to noticeId"),
+        ({"noticeId": "opp-ref-1", "revisionId": "missing-revision", "sourceExcerpt": "x"}, "revisionId does not exist"),
+        ({"noticeId": "opp-ref-1", "revisionId": other_revision["revisionId"], "sourceExcerpt": "x"}, "revisionId does not belong to noticeId"),
     ]
     for payload, expected in invalid_payloads:
         try:
@@ -271,14 +275,30 @@ def test_evidence_validation_rejects_missing_and_cross_notice_references(tmp_pat
         else:
             raise AssertionError(f"Expected {expected}")
 
-    citation = store.create_evidence_citation({"noticeId": "opp-ref-1", "proposalId": proposal["id"], "documentId": doc["id"], "sourceExcerpt": "valid"})
+    citation = store.create_evidence_citation(
+        {
+            "noticeId": "opp-ref-1",
+            "proposalId": proposal["id"],
+            "documentId": doc["id"],
+            "revisionId": revision["revisionId"],
+            "sourceExcerpt": "valid",
+        }
+    )
+    assert citation["revisionId"] == revision["revisionId"]
+
+    legacy = store.create_evidence_citation({"noticeId": "opp-ref-1", "revisionId": "", "sourceExcerpt": "legacy citation"})
+    assert legacy["revisionId"] is None
+
     for payload, expected in [
         ({"documentId": other_doc["id"]}, "documentId does not belong to noticeId"),
         ({"proposalId": other_proposal["id"]}, "proposalId does not belong to noticeId"),
+        ({"revisionId": other_revision["revisionId"]}, "revisionId does not belong to noticeId"),
         ({"noticeId": "opp-ref-2", "documentId": other_doc["id"]}, "documentId does not belong to noticeId"),
         ({"noticeId": "opp-ref-2", "proposalId": other_proposal["id"]}, "proposalId does not belong to noticeId"),
+        ({"noticeId": "opp-ref-2", "revisionId": other_revision["revisionId"]}, "revisionId does not belong to noticeId"),
         ({"documentId": 999_999}, "documentId does not exist"),
         ({"proposalId": 999_999}, "proposalId does not exist"),
+        ({"revisionId": "missing-revision"}, "revisionId does not exist"),
     ]:
         try:
             store.update_evidence_citation(citation["id"], payload)
