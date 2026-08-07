@@ -55,6 +55,10 @@ ARTIFACT_FORMATS = {"markdown", "text"}
 EVIDENCE_STATES = {"generated", "needs-review", "verified", "rejected", "superseded"}
 EVIDENCE_METHODS = {"manual", "document-intake", "ai-assisted", "imported", "legacy-snippet"}
 AMENDMENT_TASK_STATUSES = {"open", "in-progress", "done", "blocked", "dismissed"}
+COMPLIANCE_MANDATORY_STATES = {"mandatory", "optional", "conditional", "unknown"}
+COMPLIANCE_STATUSES = {"open", "in-progress", "addressed", "not-applicable", "rejected", "merged", "split"}
+COMPLIANCE_VERIFICATION_STATES = {"needs-review", "verified", "rejected"}
+COMPLIANCE_PROVENANCE = {"manual", "generated", "human-edited", "merged", "split"}
 
 
 def proposal_stage_items(current_stage: str) -> list[dict[str, str]]:
@@ -552,6 +556,71 @@ class Store:
                 ON amendment_review_tasks (notice_id, status, due_date, id)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS compliance_requirements (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  citation_id INTEGER,
+                  revision_id TEXT,
+                  category TEXT NOT NULL DEFAULT 'General',
+                  requirement_text TEXT NOT NULL,
+                  mandatory_state TEXT NOT NULL DEFAULT 'unknown',
+                  owner TEXT NOT NULL DEFAULT '',
+                  due_date TEXT NOT NULL DEFAULT '',
+                  response_location TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL DEFAULT 'open',
+                  notes TEXT NOT NULL DEFAULT '',
+                  verification_state TEXT NOT NULL DEFAULT 'needs-review',
+                  verifier TEXT NOT NULL DEFAULT '',
+                  verified_at TEXT NOT NULL DEFAULT '',
+                  provenance TEXT NOT NULL DEFAULT 'manual',
+                  generation_key TEXT NOT NULL DEFAULT '',
+                  generation_metadata_json TEXT NOT NULL DEFAULT '{}',
+                  human_edited INTEGER NOT NULL DEFAULT 0,
+                  invalidated INTEGER NOT NULL DEFAULT 0,
+                  invalidation_reason TEXT NOT NULL DEFAULT '',
+                  invalidated_at TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY(citation_id) REFERENCES evidence_citations(id) ON DELETE SET NULL,
+                  FOREIGN KEY(revision_id) REFERENCES opportunity_revisions(revision_id) ON DELETE SET NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_compliance_requirements_notice
+                ON compliance_requirements (notice_id, status, mandatory_state, verification_state, id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_compliance_requirements_generation
+                ON compliance_requirements (notice_id, generation_key)
+                WHERE generation_key != ''
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS compliance_requirement_lineage (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  child_requirement_id INTEGER NOT NULL,
+                  parent_requirement_id INTEGER NOT NULL,
+                  relation TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY(child_requirement_id) REFERENCES compliance_requirements(id) ON DELETE CASCADE,
+                  FOREIGN KEY(parent_requirement_id) REFERENCES compliance_requirements(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_compliance_lineage_child
+                ON compliance_requirement_lineage (child_requirement_id, parent_requirement_id)
+                """
+            )
 
     def _canonical_attachment(self, doc: dict[str, Any], idx: int) -> dict[str, str]:
         url = clean_text(doc.get("url") or doc.get("href") or doc.get("link") or doc.get("resourceUrl") or doc.get("source"), 1200)
@@ -904,6 +973,20 @@ class Store:
                     )
                     if cur.rowcount:
                         changes.append({**spec, "id": cur.lastrowid, "noticeId": notice_id, "detectedAt": now})
+                invalidating_changes = [item for item in changes if item.get("impact") in {"critical", "high", "medium"} and item.get("field") != "deadline"]
+                if invalidating_changes:
+                    conn.execute(
+                        """
+                        UPDATE compliance_requirements
+                        SET invalidated = 1,
+                            invalidation_reason = 'Citation predates material revision',
+                            invalidated_at = CASE WHEN invalidated = 0 THEN ? ELSE invalidated_at END,
+                            updated_at = ?
+                        WHERE notice_id = ? AND invalidated = 0 AND citation_id IS NOT NULL
+                          AND revision_id IS NOT NULL AND revision_id != ?
+                        """,
+                        (now, now, notice_id, revision_id),
+                    )
             row = conn.execute("SELECT * FROM opportunity_revisions WHERE revision_id = ?", (revision_id,)).fetchone()
         return {"created": True, "revision": self._revision_from_row(row), "changes": changes}
 
@@ -1270,6 +1353,599 @@ class Store:
             "updatedAt": row["updated_at"],
             "legacySnippet": False,
         }
+
+    def _json_metadata(self, value: Any) -> str:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value or "{}")
+            except json.JSONDecodeError:
+                parsed = {"value": clean_text(value, 2000)}
+        elif isinstance(value, dict):
+            parsed = value
+        else:
+            parsed = {}
+        return json.dumps(parsed, sort_keys=True)
+
+    def _validate_compliance_refs(self, conn: sqlite3.Connection, values: dict[str, Any]) -> None:
+        if values["citation_id"] is not None:
+            citation = conn.execute("SELECT notice_id FROM evidence_citations WHERE id = ?", (values["citation_id"],)).fetchone()
+            if not citation:
+                raise ValueError("citationId does not exist")
+            if citation["notice_id"] != values["notice_id"]:
+                raise ValueError("citationId does not belong to noticeId")
+        if values["revision_id"]:
+            revision = conn.execute("SELECT notice_id FROM opportunity_revisions WHERE revision_id = ?", (values["revision_id"],)).fetchone()
+            if not revision:
+                raise ValueError("revisionId does not exist")
+            if revision["notice_id"] != values["notice_id"]:
+                raise ValueError("revisionId does not belong to noticeId")
+
+    def _insert_compliance_requirement(self, conn: sqlite3.Connection, values: dict[str, Any], now: str) -> int:
+        self._validate_compliance_refs(conn, values)
+        conn.execute(
+            """
+            INSERT INTO compliance_requirements (
+              notice_id, citation_id, revision_id, category, requirement_text, mandatory_state,
+              owner, due_date, response_location, status, notes, verification_state, verifier,
+              verified_at, provenance, generation_key, generation_metadata_json, human_edited,
+              invalidated, invalidation_reason, invalidated_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                values["notice_id"],
+                values["citation_id"],
+                values["revision_id"],
+                values["category"],
+                values["requirement_text"],
+                values["mandatory_state"],
+                values["owner"],
+                values["due_date"],
+                values["response_location"],
+                values["status"],
+                values["notes"],
+                values["verification_state"],
+                values["verifier"],
+                now if values["verification_state"] == "verified" else "",
+                values["provenance"],
+                values["generation_key"],
+                values["generation_metadata_json"],
+                values["human_edited"],
+                values["invalidated"],
+                values["invalidation_reason"],
+                now if values["invalidated"] else "",
+                now,
+                now,
+            ),
+        )
+        return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+    def _validate_compliance_payload(self, payload: dict[str, Any], existing: sqlite3.Row | None = None) -> dict[str, Any]:
+        payload_notice_id = clean_text(payload.get("noticeId") or payload.get("notice_id"), 200)
+        if existing and not payload_notice_id:
+            raise ValueError("noticeId is required")
+        notice_id = payload_notice_id or clean_text(existing["notice_id"] if existing else "", 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        if existing and notice_id != existing["notice_id"]:
+            raise ValueError("noticeId does not match requirement")
+        citation_raw = payload.get("citationId", payload.get("citation_id", existing["citation_id"] if existing else None))
+        revision_id = clean_text(payload.get("revisionId") or payload.get("revision_id") or (existing["revision_id"] if existing else ""), 240)
+        category = clean_text(payload.get("category", existing["category"] if existing else "General"), 160) or "General"
+        requirement_text = clean_text(payload.get("requirementText") or payload.get("requirement_text") or (existing["requirement_text"] if existing else ""), 5000)
+        if not requirement_text:
+            raise ValueError("requirementText is required")
+        mandatory_state = clean_text(payload.get("mandatoryState") or payload.get("mandatory_state") or (existing["mandatory_state"] if existing else "unknown"), 40).lower()
+        if mandatory_state not in COMPLIANCE_MANDATORY_STATES:
+            raise ValueError(f"mandatoryState must be one of: {', '.join(sorted(COMPLIANCE_MANDATORY_STATES))}")
+        status = clean_text(payload.get("status", existing["status"] if existing else "open"), 60).lower()
+        if status not in COMPLIANCE_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(sorted(COMPLIANCE_STATUSES))}")
+        verification_state = clean_text(payload.get("verificationState") or payload.get("verification_state") or (existing["verification_state"] if existing else "needs-review"), 60).lower()
+        if verification_state not in COMPLIANCE_VERIFICATION_STATES:
+            raise ValueError(f"verificationState must be one of: {', '.join(sorted(COMPLIANCE_VERIFICATION_STATES))}")
+        provenance = clean_text(payload.get("provenance", existing["provenance"] if existing else "manual"), 60).lower()
+        if provenance not in COMPLIANCE_PROVENANCE:
+            provenance = "manual"
+        return {
+            "notice_id": notice_id,
+            "citation_id": int(citation_raw) if citation_raw not in (None, "") else None,
+            "revision_id": revision_id or None,
+            "category": category,
+            "requirement_text": requirement_text,
+            "mandatory_state": mandatory_state,
+            "owner": clean_text(payload.get("owner", existing["owner"] if existing else ""), 160),
+            "due_date": clean_text(payload.get("dueDate") or payload.get("due_date") or (existing["due_date"] if existing else ""), 80),
+            "response_location": clean_text(payload.get("responseLocation") or payload.get("response_location") or (existing["response_location"] if existing else ""), 300),
+            "status": status,
+            "notes": clean_text(payload.get("notes", existing["notes"] if existing else ""), 5000),
+            "verification_state": verification_state,
+            "verifier": clean_text(payload.get("verifier", existing["verifier"] if existing else ""), 160),
+            "provenance": provenance,
+            "generation_key": clean_text(payload.get("generationKey") or payload.get("generation_key") or (existing["generation_key"] if existing else ""), 128),
+            "generation_metadata_json": self._json_metadata(payload.get("generationMetadata") or payload.get("generation_metadata") or (existing["generation_metadata_json"] if existing else {})),
+            "human_edited": 1 if payload.get("humanEdited", existing["human_edited"] if existing else False) else 0,
+            "invalidated": 1 if payload.get("invalidated", existing["invalidated"] if existing else False) else 0,
+            "invalidation_reason": clean_text(payload.get("invalidationReason") or payload.get("invalidation_reason") or (existing["invalidation_reason"] if existing else ""), 1000),
+        }
+
+    def _compliance_from_row(self, row: sqlite3.Row, parent_ids: list[int] | None = None) -> dict[str, Any]:
+        try:
+            metadata = json.loads(row["generation_metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "citationId": row["citation_id"],
+            "revisionId": row["revision_id"],
+            "category": row["category"],
+            "requirementText": row["requirement_text"],
+            "mandatoryState": row["mandatory_state"],
+            "owner": row["owner"],
+            "dueDate": row["due_date"],
+            "responseLocation": row["response_location"],
+            "status": row["status"],
+            "notes": row["notes"],
+            "verificationState": row["verification_state"],
+            "verifier": row["verifier"],
+            "verifiedAt": row["verified_at"],
+            "provenance": row["provenance"],
+            "generationKey": row["generation_key"],
+            "generationMetadata": metadata,
+            "humanEdited": bool(row["human_edited"]),
+            "invalidated": bool(row["invalidated"]),
+            "invalidationReason": row["invalidation_reason"],
+            "invalidatedAt": row["invalidated_at"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "parentRequirementIds": parent_ids or [],
+        }
+
+    def _lineage_map(self, conn: sqlite3.Connection, requirement_ids: list[int]) -> dict[int, list[int]]:
+        if not requirement_ids:
+            return {}
+        placeholders = ",".join("?" for _ in requirement_ids)
+        rows = conn.execute(
+            f"SELECT child_requirement_id, parent_requirement_id FROM compliance_requirement_lineage WHERE child_requirement_id IN ({placeholders}) ORDER BY id",
+            requirement_ids,
+        ).fetchall()
+        mapped: dict[int, list[int]] = {}
+        for row in rows:
+            mapped.setdefault(row["child_requirement_id"], []).append(row["parent_requirement_id"])
+        return mapped
+
+    def compliance_requirement(self, requirement_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM compliance_requirements WHERE id = ?", (int(requirement_id),)).fetchone()
+            if not row:
+                return None
+            lineage = self._lineage_map(conn, [int(requirement_id)])
+        return self._compliance_from_row(row, lineage.get(int(requirement_id), []))
+
+    def compliance_requirements(self, notice_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM compliance_requirements
+                WHERE notice_id = ?
+                ORDER BY category COLLATE NOCASE, mandatory_state, status, id
+                """,
+                (notice_id,),
+            ).fetchall()
+            lineage = self._lineage_map(conn, [row["id"] for row in rows])
+        return [self._compliance_from_row(row, lineage.get(row["id"], [])) for row in rows]
+
+    def create_compliance_requirement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        values = self._validate_compliance_payload(payload)
+        now = utc_now()
+        with self.connect() as conn:
+            requirement_id = self._insert_compliance_requirement(conn, values, now)
+            self._add_event(conn, values["notice_id"], "compliance_created", "", values["status"], "Compliance requirement created", now)
+        return self.compliance_requirement(requirement_id) or {}
+
+    def update_compliance_requirement(self, requirement_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as conn:
+            existing = conn.execute("SELECT * FROM compliance_requirements WHERE id = ?", (int(requirement_id),)).fetchone()
+            if not existing:
+                raise ValueError("requirement does not exist")
+            values = self._validate_compliance_payload(payload, existing)
+            self._validate_compliance_refs(conn, values)
+            verified_at = existing["verified_at"]
+            if values["verification_state"] == "verified" and existing["verification_state"] != "verified":
+                verified_at = now
+            elif values["verification_state"] != "verified":
+                verified_at = ""
+            human_fields = {"category", "requirementText", "requirement_text", "mandatoryState", "mandatory_state", "owner", "dueDate", "due_date", "responseLocation", "response_location", "status", "notes"}
+            human_edited = 1 if existing["human_edited"] or any(key in payload for key in human_fields) else 0
+            invalidated_at = existing["invalidated_at"]
+            if values["invalidated"] and not existing["invalidated"]:
+                invalidated_at = now
+            elif not values["invalidated"]:
+                invalidated_at = ""
+            conn.execute(
+                """
+                UPDATE compliance_requirements
+                SET citation_id = ?, revision_id = ?, category = ?, requirement_text = ?, mandatory_state = ?,
+                    owner = ?, due_date = ?, response_location = ?, status = ?, notes = ?,
+                    verification_state = ?, verifier = ?, verified_at = ?, provenance = ?,
+                    generation_key = ?, generation_metadata_json = ?, human_edited = ?, invalidated = ?,
+                    invalidation_reason = ?, invalidated_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    values["citation_id"],
+                    values["revision_id"],
+                    values["category"],
+                    values["requirement_text"],
+                    values["mandatory_state"],
+                    values["owner"],
+                    values["due_date"],
+                    values["response_location"],
+                    values["status"],
+                    values["notes"],
+                    values["verification_state"],
+                    values["verifier"],
+                    verified_at,
+                    values["provenance"],
+                    values["generation_key"],
+                    values["generation_metadata_json"],
+                    human_edited,
+                    values["invalidated"],
+                    values["invalidation_reason"],
+                    invalidated_at,
+                    now,
+                    int(requirement_id),
+                ),
+            )
+            self._add_event(conn, existing["notice_id"], "compliance_updated", existing["status"], values["status"], "Compliance requirement updated", now)
+        return self.compliance_requirement(requirement_id) or {}
+
+    def verify_compliance_requirement(self, requirement_id: int, state: str, verifier: str = "") -> dict[str, Any]:
+        existing = self.compliance_requirement(requirement_id)
+        if not existing:
+            raise ValueError("requirement does not exist")
+        return self.update_compliance_requirement(requirement_id, {"noticeId": existing["noticeId"], "verificationState": state, "verifier": verifier})
+
+    def verify_compliance_requirement_for_notice(self, requirement_id: int, notice_id: str, state: str, verifier: str = "") -> dict[str, Any]:
+        existing = self.compliance_requirement(requirement_id)
+        if not existing:
+            raise ValueError("requirement does not exist")
+        if existing["noticeId"] != notice_id:
+            raise ValueError("requirementId does not belong to noticeId")
+        return self.update_compliance_requirement(requirement_id, {"noticeId": notice_id, "verificationState": state, "verifier": verifier})
+
+    def reject_compliance_requirement(self, requirement_id: int, notice_id: str) -> dict[str, Any]:
+        existing = self.compliance_requirement(requirement_id)
+        if not existing:
+            raise ValueError("requirement does not exist")
+        if existing["noticeId"] != notice_id:
+            raise ValueError("requirementId does not belong to noticeId")
+        return self.update_compliance_requirement(requirement_id, {"noticeId": notice_id, "status": "rejected", "verificationState": "rejected"})
+
+    def _generated_requirement_from_citation(self, citation: sqlite3.Row) -> dict[str, Any] | None:
+        text = compact_text(citation["extracted_claim"] or citation["source_excerpt"], 1200)
+        if not text:
+            return None
+        lower = text.lower()
+        if not any(token in lower for token in ("shall", "must", "required", "requirement", "submit", "provide", "deliver", "comply")):
+            return None
+        category = "Submission" if any(token in lower for token in ("submit", "proposal", "volume")) else "Performance"
+        if "report" in lower:
+            category = "Reporting"
+        if any(token in lower for token in ("quality", "management plan", "staffing")):
+            category = "Management"
+        mandatory = "mandatory" if any(token in lower for token in ("shall", "must", "required")) else "conditional"
+        normalized_text = compact_text(text, 1200).casefold()
+        generation_key = hashlib.sha256(f"citation-requirement:{normalized_text}".encode()).hexdigest()
+        return {
+            "noticeId": citation["notice_id"],
+            "citationId": citation["id"],
+            "revisionId": citation["revision_id"],
+            "category": category,
+            "requirementText": text,
+            "mandatoryState": mandatory,
+            "status": "open",
+            "verificationState": "needs-review",
+            "provenance": "generated",
+            "generationKey": generation_key,
+            "generationMetadata": {
+                "method": "deterministic-citation",
+                "citationId": citation["id"],
+                "pageSection": citation["page_section"],
+            },
+        }
+
+    def generate_compliance_requirements(self, notice_id: str) -> dict[str, Any]:
+        notice_id = clean_text(notice_id, 200)
+        now = utc_now()
+        created = 0
+        updated = 0
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT * FROM evidence_citations
+                WHERE notice_id = ? AND verification_state NOT IN ('rejected', 'superseded')
+                ORDER BY document_id, page_section COLLATE NOCASE, id
+                """,
+                (notice_id,),
+            ).fetchall()
+            generated: dict[str, dict[str, Any]] = {}
+            for citation in rows:
+                payload = self._generated_requirement_from_citation(citation)
+                if not payload:
+                    continue
+                values = self._validate_compliance_payload(payload)
+                generated.setdefault(values["generation_key"], values)
+            for values in generated.values():
+                existing = conn.execute(
+                    "SELECT * FROM compliance_requirements WHERE notice_id = ? AND generation_key = ?",
+                    (notice_id, values["generation_key"]),
+                ).fetchone()
+                if existing:
+                    if not existing["human_edited"]:
+                        changed = (
+                            existing["citation_id"] != values["citation_id"]
+                            or existing["revision_id"] != values["revision_id"]
+                            or existing["category"] != values["category"]
+                            or existing["requirement_text"] != values["requirement_text"]
+                            or existing["mandatory_state"] != values["mandatory_state"]
+                            or existing["generation_metadata_json"] != values["generation_metadata_json"]
+                            or existing["invalidated"]
+                            or existing["invalidation_reason"]
+                            or existing["invalidated_at"]
+                        )
+                        if changed:
+                            conn.execute(
+                                """
+                                UPDATE compliance_requirements
+                                SET citation_id = ?, revision_id = ?, category = ?, requirement_text = ?,
+                                    mandatory_state = ?, generation_metadata_json = ?, invalidated = 0,
+                                    invalidation_reason = '', invalidated_at = '', updated_at = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    values["citation_id"],
+                                    values["revision_id"],
+                                    values["category"],
+                                    values["requirement_text"],
+                                    values["mandatory_state"],
+                                    values["generation_metadata_json"],
+                                    now,
+                                    existing["id"],
+                                ),
+                            )
+                            updated += 1
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO compliance_requirements (
+                      notice_id, citation_id, revision_id, category, requirement_text, mandatory_state,
+                      status, verification_state, provenance, generation_key, generation_metadata_json,
+                      created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'open', 'needs-review', 'generated', ?, ?, ?, ?)
+                    """,
+                    (
+                        values["notice_id"],
+                        values["citation_id"],
+                        values["revision_id"],
+                        values["category"],
+                        values["requirement_text"],
+                        values["mandatory_state"],
+                        values["generation_key"],
+                        values["generation_metadata_json"],
+                        now,
+                        now,
+                    ),
+                )
+                created += 1
+            self._invalidate_compliance_for_stale_citations(conn, notice_id, now)
+        return {"ok": True, "noticeId": notice_id, "createdCount": created, "updatedCount": updated, "requirements": self.compliance_requirements(notice_id)}
+
+    def _invalidate_compliance_for_stale_citations(self, conn: sqlite3.Connection, notice_id: str, now: str) -> None:
+        stale_ids = {int(item["citationId"]) for item in self.stale_evidence_warnings(notice_id).get("items", []) if item.get("citationId")}
+        if not stale_ids:
+            return
+        placeholders = ",".join("?" for _ in stale_ids)
+        conn.execute(
+            f"""
+            UPDATE compliance_requirements
+            SET invalidated = 1,
+                invalidation_reason = 'Citation predates material revision or stale source',
+                invalidated_at = CASE WHEN invalidated = 0 THEN ? ELSE invalidated_at END,
+                updated_at = ?
+            WHERE notice_id = ? AND citation_id IN ({placeholders}) AND invalidated = 0
+            """,
+            [now, now, notice_id, *stale_ids],
+        )
+
+    def merge_compliance_requirements(self, notice_id: str, requirement_ids: list[int], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        notice_id = clean_text(notice_id, 200)
+        ids = [int(item) for item in requirement_ids]
+        if len(set(ids)) < 2:
+            raise ValueError("at least two requirementIds are required")
+        payload = payload or {}
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            placeholders = ",".join("?" for _ in ids)
+            rows = conn.execute(f"SELECT * FROM compliance_requirements WHERE id IN ({placeholders}) ORDER BY id", ids).fetchall()
+            if len(rows) != len(set(ids)):
+                raise ValueError("requirementId does not exist")
+            if any(row["notice_id"] != notice_id for row in rows):
+                raise ValueError("requirementId does not belong to noticeId")
+            merged_text = clean_text(payload.get("requirementText"), 5000) or " / ".join(row["requirement_text"] for row in rows)
+            values = self._validate_compliance_payload(
+                {
+                    "noticeId": notice_id,
+                    "citationId": rows[0]["citation_id"],
+                    "revisionId": rows[0]["revision_id"],
+                    "category": clean_text(payload.get("category"), 160) or rows[0]["category"],
+                    "requirementText": merged_text,
+                    "mandatoryState": rows[0]["mandatory_state"],
+                    "status": "open",
+                    "provenance": "merged",
+                    "humanEdited": True,
+                    "generationMetadata": {"mergedRequirementIds": ids},
+                }
+            )
+            merged_id = self._insert_compliance_requirement(conn, values, now)
+            self._add_event(conn, notice_id, "compliance_created", "", values["status"], "Compliance requirement created", now)
+            for parent_id in ids:
+                conn.execute(
+                    """
+                    INSERT INTO compliance_requirement_lineage (notice_id, child_requirement_id, parent_requirement_id, relation, created_at)
+                    VALUES (?, ?, ?, 'merge', ?)
+                    """,
+                    (notice_id, merged_id, parent_id, now),
+                )
+                conn.execute("UPDATE compliance_requirements SET status = 'merged', updated_at = ? WHERE id = ?", (now, parent_id))
+            row = conn.execute("SELECT * FROM compliance_requirements WHERE id = ?", (merged_id,)).fetchone()
+            lineage = self._lineage_map(conn, [merged_id])
+            requirement = self._compliance_from_row(row, lineage.get(merged_id, []))
+        return {"ok": True, "requirement": requirement, "requirements": self.compliance_requirements(notice_id)}
+
+    def split_compliance_requirement(self, notice_id: str, requirement_id: int, parts: list[dict[str, Any]]) -> dict[str, Any]:
+        notice_id = clean_text(notice_id, 200)
+        if len(parts) < 2:
+            raise ValueError("at least two split parts are required")
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            parent_row = conn.execute("SELECT * FROM compliance_requirements WHERE id = ?", (int(requirement_id),)).fetchone()
+            if not parent_row:
+                raise ValueError("requirement does not exist")
+            if parent_row["notice_id"] != notice_id:
+                raise ValueError("requirementId does not belong to noticeId")
+            values_list = []
+            for part in parts:
+                values = self._validate_compliance_payload(
+                    {
+                        "noticeId": notice_id,
+                        "citationId": part.get("citationId", parent_row["citation_id"]),
+                        "revisionId": part.get("revisionId", parent_row["revision_id"]),
+                        "category": part.get("category", parent_row["category"]),
+                        "requirementText": part.get("requirementText") or part.get("requirement_text"),
+                        "mandatoryState": part.get("mandatoryState", parent_row["mandatory_state"]),
+                        "status": part.get("status", "open"),
+                        "provenance": "split",
+                        "humanEdited": True,
+                        "generationMetadata": {"splitFromRequirementId": int(requirement_id)},
+                    }
+                )
+                self._validate_compliance_refs(conn, values)
+                values_list.append(values)
+            created_ids = []
+            for values in values_list:
+                child_id = self._insert_compliance_requirement(conn, values, now)
+                created_ids.append(child_id)
+                self._add_event(conn, notice_id, "compliance_created", "", values["status"], "Compliance requirement created", now)
+                conn.execute(
+                    """
+                    INSERT INTO compliance_requirement_lineage (notice_id, child_requirement_id, parent_requirement_id, relation, created_at)
+                    VALUES (?, ?, ?, 'split', ?)
+                    """,
+                    (notice_id, child_id, int(requirement_id), now),
+                )
+            conn.execute("UPDATE compliance_requirements SET status = 'split', updated_at = ? WHERE id = ?", (now, int(requirement_id)))
+            self._add_event(conn, notice_id, "compliance_updated", parent_row["status"], "split", "Compliance requirement updated", now)
+            placeholders = ",".join("?" for _ in created_ids)
+            rows = conn.execute(f"SELECT * FROM compliance_requirements WHERE id IN ({placeholders}) ORDER BY id", created_ids).fetchall()
+            lineage = self._lineage_map(conn, created_ids)
+            created = [self._compliance_from_row(row, lineage.get(row["id"], [])) for row in rows]
+        return {"ok": True, "requirements": created, "items": self.compliance_requirements(notice_id)}
+
+    def export_compliance_csv(self, notice_id: str, requirements: list[dict[str, Any]] | None = None) -> str:
+        import csv
+        import io
+
+        def safe_cell(value: Any) -> Any:
+            if value is None:
+                return ""
+            text = str(value)
+            return f"'{text}" if text[:1] in {"=", "+", "-", "@", "\t", "\r"} else text
+
+        output = io.StringIO(newline="")
+        fields = [
+            "notice_id",
+            "requirement_id",
+            "category",
+            "mandatory_state",
+            "status",
+            "verification_state",
+            "owner",
+            "due_date",
+            "response_location",
+            "requirement_text",
+            "citation_id",
+            "revision_id",
+            "source_trace",
+            "invalidated",
+            "invalidation_reason",
+            "notes",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\r\n")
+        writer.writeheader()
+        for item in requirements or self.compliance_requirements(notice_id):
+            writer.writerow(
+                {
+                    "notice_id": safe_cell(item.get("noticeId") or notice_id),
+                    "requirement_id": item.get("id") or "",
+                    "category": safe_cell(item.get("category") or ""),
+                    "mandatory_state": safe_cell(item.get("mandatoryState") or ""),
+                    "status": safe_cell(item.get("status") or ""),
+                    "verification_state": safe_cell(item.get("verificationState") or ""),
+                    "owner": safe_cell(item.get("owner") or ""),
+                    "due_date": safe_cell(item.get("dueDate") or ""),
+                    "response_location": safe_cell(item.get("responseLocation") or ""),
+                    "requirement_text": safe_cell(item.get("requirementText") or ""),
+                    "citation_id": item.get("citationId") or "",
+                    "revision_id": safe_cell(item.get("revisionId") or ""),
+                    "source_trace": safe_cell(f"Source: citation #{item.get('citationId') or 'missing'}; revision {item.get('revisionId') or 'unscoped'}"),
+                    "invalidated": "yes" if item.get("invalidated") else "no",
+                    "invalidation_reason": safe_cell(item.get("invalidationReason") or ""),
+                    "notes": safe_cell(item.get("notes") or ""),
+                }
+            )
+        return output.getvalue()
+
+    def export_compliance_markdown(self, notice_id: str, requirements: list[dict[str, Any]] | None = None) -> str:
+        import html
+
+        def cell(value: Any) -> str:
+            flattened = re.sub(r"[\r\n]+", " ", str(value or ""))
+            return html.escape(flattened, quote=False).replace("|", "\\|").strip()
+
+        rows = requirements or self.compliance_requirements(notice_id)
+        lines = [
+            f"# Compliance Matrix - {cell(notice_id)}",
+            "",
+            "| ID | Category | Mandatory | Status | Verification | Requirement | Source | Invalidated |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for item in rows:
+            source = f"citation #{item.get('citationId') or 'missing'} / revision {item.get('revisionId') or 'unscoped'}"
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        cell(item.get("id")),
+                        cell(item.get("category")),
+                        cell(item.get("mandatoryState")),
+                        cell(item.get("status")),
+                        cell(item.get("verificationState")),
+                        cell(item.get("requirementText")),
+                        cell(source),
+                        cell(item.get("invalidationReason") if item.get("invalidated") else ""),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+        return "\n".join(lines)
 
     def record_ai_audit(self, payload: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()

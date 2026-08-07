@@ -45,6 +45,333 @@ def test_report_uses_configured_business_name_and_normalized_time(tmp_path: Path
     assert "Example Technology Services LLC" not in html
 
 
+def test_report_renders_compliance_matrix_controls_and_js_syntax(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    payload = {
+        "postedFrom": "08/01/2026",
+        "postedTo": "08/04/2026",
+        "matches": [
+            {
+                "noticeId": "abc-<unsafe>",
+                "title": "Security Support <script>",
+                "type": "Solicitation",
+                "postedDate": "2026-08-04",
+                "responseDeadline": "2026-08-10T09:00:00-04:00",
+                "score": 10,
+                "reasons": ["keywords: security"],
+                "recommendation": "Pursue",
+                "proposal": {"id": 1, "role": "prime", "stage": "requirements", "stageLabel": "Requirements", "stages": []},
+                "complianceRequirements": [
+                    {
+                        "id": 12,
+                        "noticeId": "abc-<unsafe>",
+                        "citationId": 4,
+                        "revisionId": "abc-rev",
+                        "category": "Submission",
+                        "requirementText": "Submit <management> plan & certify.",
+                        "mandatoryState": "mandatory",
+                        "owner": "Capture Lead",
+                        "dueDate": "2026-08-08",
+                        "responseLocation": "Volume I",
+                        "status": "open",
+                        "notes": "Needs review",
+                        "verificationState": "needs-review",
+                        "verifier": "",
+                        "invalidated": True,
+                        "invalidationReason": "Citation predates material revision",
+                        "generationMetadata": {"source": "test"},
+                    }
+                ],
+            }
+        ],
+        "errors": [],
+    }
+    report = build_report_payload(payload, profile, settings, unseen=[])
+    html = build_html_report(report)
+    script = _extract_report_script(html)
+
+    assert "Compliance Matrix" in html
+    assert "compliance-matrix" in html
+    assert "compliance-filter-category" in html
+    assert "compliance-filter-status" in html
+    assert "compliance-filter-mandatory" in html
+    assert "compliance-filter-verification" in html
+    assert "compliance-filter-invalidated" in html
+    assert "compliance-filter-missing-citation" in html
+    assert "/api/compliance/generate" in html
+    assert "/api/compliance/add" in html
+    assert "/api/compliance/update" in html
+    assert "/api/compliance/verify" in html
+    assert "/api/compliance/merge" in html
+    assert "/api/compliance/split" in html
+    assert "/api/compliance-export/" in html
+    assert "Submit &lt;management&gt; plan &amp; certify." in html or "\\u003cmanagement>" in html
+    assert "<management>" not in html
+    assert "aria-label=\"Compliance category filter\"" in html
+    assert "window.confirm('Reject this compliance requirement?')" in html
+    assert "window.confirm('Merge selected compliance requirements?')" in html
+    assert "window.confirm('Split this compliance requirement?')" in html
+
+    subprocess.run(["node", "--check"], input=script, text=True, check=True)
+
+
+def test_report_compliance_success_messages_and_add_button_target_repainted_dom(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    report = build_report_payload(
+        {
+            "postedFrom": "08/01/2026",
+            "postedTo": "08/04/2026",
+            "matches": [{"noticeId": "abc", "title": "Security Support", "proposal": {"id": 1}, "complianceRequirements": []}],
+            "errors": [],
+        },
+        profile,
+        settings,
+        unseen=[],
+    )
+    script = _extract_report_script(build_html_report(report))
+    helpers = "\n".join(
+        [
+            _extract_one_line_js_function(script, "escapeHtml"),
+            _extract_one_line_js_function(script, "safeClassToken"),
+            _extract_one_line_js_function(script, "icon"),
+            _extract_one_line_js_function(script, "iconLabel"),
+            _extract_one_line_js_function(script, "complianceOptions"),
+            _extract_one_line_js_function(script, "complianceRowHtml"),
+            _extract_one_line_js_function(script, "complianceMatrixHtml"),
+            _extract_one_line_js_function(script, "syncCompliance"),
+            _extract_one_line_js_function(script, "complianceRowPayload"),
+            _extract_one_line_js_function(script, "repaintCompliance"),
+            _extract_one_line_js_function(script, "setComplianceMessage"),
+            _extract_one_line_js_function(script, "revealComplianceNewRow"),
+            _extract_one_line_js_function(script, "applyComplianceFilters"),
+            _extract_one_line_js_function(script, "wireComplianceMatrix"),
+        ]
+    )
+    js = textwrap.dedent(
+        f"""
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        const byId = new Map([['abc', {{noticeId:'abc', complianceRequirements:[]}}]]);
+        const tokenPanel = {{classList: {{add() {{}}}}}};
+        const localStorage = {{getItem() {{ return ''; }}}};
+        const window = {{confirm() {{ return true; }}}};
+        function token() {{ return 'secret'; }}
+        async function readJsonResponse() {{ return {{ok:true}}; }}
+        let complianceWrite;
+        {helpers}
+        complianceWrite = async (endpoint, body, action) => {{
+          if (endpoint === '/api/compliance/generate') {{
+            return {{ok:true, requirements:[{{id:1, noticeId:'abc', citationId:7, category:'Submission', requirementText:'Submit a plan.', mandatoryState:'mandatory', status:'open', verificationState:'needs-review'}}]}};
+          }}
+          if (endpoint === '/api/compliance/add') {{
+            return {{ok:true, requirements:[{{id:2, noticeId:'abc', citationId:8, category:body.category, requirementText:body.requirementText, mandatoryState:'mandatory', status:'open', verificationState:'needs-review'}}]}};
+          }}
+          throw new Error(action);
+        }};
+        class FakeClassList {{
+          constructor() {{ this.values = new Set(); }}
+          add(value) {{ this.values.add(value); }}
+          remove(value) {{ this.values.delete(value); }}
+          contains(value) {{ return this.values.has(value); }}
+        }}
+        class FakeElement {{
+          constructor(className = '') {{
+            this.className = className;
+            this.textContent = '';
+            this.value = '';
+            this.checked = false;
+            this.style = {{}};
+            this.dataset = {{}};
+            this.listeners = {{}};
+            this.classList = new FakeClassList();
+          }}
+          addEventListener(name, fn) {{ this.listeners[name] = fn; }}
+          async click() {{ await this.listeners.click?.({{target:this}}); }}
+          focus() {{ this.focused = true; }}
+          scrollIntoView() {{ this.scrolled = true; }}
+          closest() {{ return this; }}
+          querySelector() {{ return null; }}
+          querySelectorAll() {{ return []; }}
+        }}
+        class FakePanel extends FakeElement {{
+          constructor(html = '') {{
+            super('compliance-matrix');
+            this.html = html;
+            this.message = new FakeElement('compliance-message');
+            this.generate = new FakeElement('compliance-generate');
+            this.add = new FakeElement('compliance-add');
+            this.create = new FakeElement('compliance-create');
+            this.newRow = new FakeElement('compliance-new-row');
+            this.newCategory = new FakeElement('compliance-new-category');
+            this.newText = new FakeElement('compliance-new-text');
+            this.newCategory.value = 'Submission';
+            this.newText.value = 'Manual requirement';
+          }}
+          set outerHTML(value) {{ this.root.panel = new FakePanel(value); this.root.panel.root = this.root; }}
+          querySelector(selector) {{
+            return {{
+              '.compliance-message': this.message,
+              '.compliance-generate': this.generate,
+              '.compliance-add': this.add,
+              '.compliance-create': this.create,
+              '.compliance-new-row': this.newRow,
+              '.compliance-new-category': this.newCategory,
+              '.compliance-new-text': this.newText,
+              '.compliance-merge': new FakeElement('compliance-merge')
+            }}[selector] || null;
+          }}
+          querySelectorAll(selector) {{ return selector === '.compliance-filters select,.compliance-filters input' ? [] : []; }}
+        }}
+        const root = {{
+          panel: new FakePanel(complianceMatrixHtml(byId.get('abc'))),
+          querySelector(selector) {{ return selector === '.compliance-matrix' ? this.panel : null; }},
+          querySelectorAll(selector) {{ return selector === '.compliance-matrix' ? [this.panel] : []; }}
+        }};
+        root.panel.root = root;
+        wireComplianceMatrix(root, 'abc');
+        await root.panel.generate.click();
+        assert(root.panel.message.textContent === 'Compliance matrix generated', 'generate success must be written into repaint panel');
+        await root.panel.add.click();
+        assert(root.panel.newRow.classList.contains('active'), 'visible Add button reveals the new requirement row');
+        assert(root.panel.newText.focused === true, 'visible Add button focuses the requirement textarea');
+        root.panel.newText.value = 'Created requirement';
+        await root.panel.create.click();
+        assert(root.panel.message.textContent === 'Requirement created', 'create success must be written into repaint panel');
+        """
+    )
+    subprocess.run(["node", "--input-type=module", "-e", js], check=True)
+
+
+def test_report_compliance_notes_render_edit_send_and_survive_repaint(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    report = build_report_payload(
+        {
+            "postedFrom": "08/01/2026",
+            "postedTo": "08/04/2026",
+            "matches": [
+                {
+                    "noticeId": "abc",
+                    "title": "Security Support",
+                    "proposal": {"id": 1},
+                    "complianceRequirements": [
+                        {
+                            "id": 3,
+                            "noticeId": "abc",
+                            "category": "Submission",
+                            "requirementText": "Submit a plan.",
+                            "notes": 'Review <img src=x onerror="alert(1)"> before final.',
+                            "mandatoryState": "mandatory",
+                            "status": "open",
+                            "verificationState": "needs-review",
+                        }
+                    ],
+                }
+            ],
+            "errors": [],
+        },
+        profile,
+        settings,
+        unseen=[],
+    )
+    script = _extract_report_script(build_html_report(report))
+    helpers = "\n".join(
+        [
+            _extract_one_line_js_function(script, "escapeHtml"),
+            _extract_one_line_js_function(script, "safeClassToken"),
+            _extract_one_line_js_function(script, "icon"),
+            _extract_one_line_js_function(script, "iconLabel"),
+            _extract_one_line_js_function(script, "complianceOptions"),
+            _extract_one_line_js_function(script, "complianceRowHtml"),
+            _extract_one_line_js_function(script, "complianceMatrixHtml"),
+            _extract_one_line_js_function(script, "syncCompliance"),
+            _extract_one_line_js_function(script, "complianceRowPayload"),
+            _extract_one_line_js_function(script, "repaintCompliance"),
+            _extract_one_line_js_function(script, "setComplianceMessage"),
+            _extract_one_line_js_function(script, "revealComplianceNewRow"),
+            _extract_one_line_js_function(script, "applyComplianceFilters"),
+            _extract_one_line_js_function(script, "wireComplianceMatrix"),
+        ]
+    )
+    js = textwrap.dedent(
+        f"""
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        const byId = new Map([['abc', {{noticeId:'abc', complianceRequirements:[{{id:3, noticeId:'abc', category:'Submission', requirementText:'Submit a plan.', notes:'Review <img src=x onerror="alert(1)"> before final.', mandatoryState:'mandatory', status:'open', verificationState:'needs-review'}}]}}]]);
+        const tokenPanel = {{classList: {{add() {{}}}}}};
+        const localStorage = {{getItem() {{ return ''; }}}};
+        const window = {{confirm() {{ return true; }}}};
+        function token() {{ return 'secret'; }}
+        async function readJsonResponse() {{ return {{ok:true}}; }}
+        let savedBody;
+        let complianceWrite;
+        {helpers}
+        complianceWrite = async (endpoint, body, action) => {{
+          if (endpoint === '/api/compliance/update') {{
+            savedBody = body;
+            return {{ok:true, requirements:[{{id:3, noticeId:'abc', category:'Submission', requirementText:body.requirementText, notes:body.notes, mandatoryState:body.mandatoryState, status:body.status, verificationState:body.verificationState}}]}};
+          }}
+          throw new Error(action);
+        }};
+        class FakeClassList {{ add() {{}} remove() {{}} contains() {{ return false; }} }}
+        class FakeElement {{
+          constructor(selector = '') {{ this.selector = selector; this.value = ''; this.checked = false; this.style = {{}}; this.dataset = {{requirementId:'3'}}; this.listeners = {{}}; this.classList = new FakeClassList(); }}
+          addEventListener(name, fn) {{ this.listeners[name] = fn; }}
+          async click() {{ await this.listeners.click?.({{target:this}}); }}
+          closest() {{ return this.row || this; }}
+          querySelector(selector) {{ return this.fields?.[selector] || null; }}
+          querySelectorAll() {{ return []; }}
+        }}
+        class FakePanel extends FakeElement {{
+          constructor(html = '') {{
+            super('compliance-matrix');
+            this.html = html;
+            this.message = new FakeElement('compliance-message');
+            this.save = new FakeElement('compliance-save');
+            this.row = new FakeElement('tr');
+            this.save.row = this.row;
+            const fields = {{
+              '.compliance-category': Object.assign(new FakeElement(), {{value:'Submission'}}),
+              '.compliance-mandatory': Object.assign(new FakeElement(), {{value:'mandatory'}}),
+              '.compliance-status': Object.assign(new FakeElement(), {{value:'open'}}),
+              '.compliance-verification': Object.assign(new FakeElement(), {{value:'needs-review'}}),
+              '.compliance-text': Object.assign(new FakeElement(), {{value:'Submit a plan.'}}),
+              '.compliance-owner': Object.assign(new FakeElement(), {{value:''}}),
+              '.compliance-due-date': Object.assign(new FakeElement(), {{value:''}}),
+              '.compliance-response-location': Object.assign(new FakeElement(), {{value:''}}),
+              '.compliance-notes': Object.assign(new FakeElement(), {{value:'Edited compliance notes'}})
+            }};
+            this.row.fields = fields;
+          }}
+          set outerHTML(value) {{ this.root.panel = new FakePanel(value); this.root.panel.root = this.root; }}
+          querySelector(selector) {{ return {{'.compliance-message': this.message, '.compliance-merge': new FakeElement('compliance-merge')}}[selector] || null; }}
+          querySelectorAll(selector) {{
+            if (selector === '.compliance-save') return [this.save];
+            if (selector === '.compliance-filters select,.compliance-filters input') return [];
+            return [];
+          }}
+        }}
+        const rowHtml = complianceRowHtml(byId.get('abc').complianceRequirements[0]);
+        assert(rowHtml.includes('class="compliance-notes"'), 'notes must render as an editable control');
+        assert(rowHtml.includes('Review &lt;img src=x onerror=&quot;alert(1)&quot;&gt; before final.'), 'existing notes must be escaped');
+        assert(!rowHtml.includes('<img src=x'), 'notes must not render raw HTML');
+        const root = {{
+          panel: new FakePanel(complianceMatrixHtml(byId.get('abc'))),
+          querySelector(selector) {{ return selector === '.compliance-matrix' ? this.panel : null; }},
+          querySelectorAll(selector) {{ return selector === '.compliance-matrix' ? [this.panel] : []; }}
+        }};
+        root.panel.root = root;
+        wireComplianceMatrix(root, 'abc');
+        await root.panel.save.click();
+        assert(savedBody.notes === 'Edited compliance notes', 'edited notes must be sent in compliance update payload');
+        assert(byId.get('abc').complianceRequirements[0].notes === 'Edited compliance notes', 'synced notes must update report state');
+        const repainted = repaintCompliance(root, 'abc');
+        assert(repainted.html.includes('Edited compliance notes'), 'saved notes must survive repaint');
+        """
+    )
+    subprocess.run(["node", "--input-type=module", "-e", js], check=True)
+
+
 def test_report_includes_professional_design_system_primitives_and_showcase(tmp_path: Path):
     profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
     settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")

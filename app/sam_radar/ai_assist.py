@@ -41,6 +41,14 @@ def _source_text(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> tuple[s
     if evidence:
         sources.append("Evidence citations")
         chunks.extend(str(item.get("sourceExcerpt") or item.get("snippet") or "") for item in evidence[:8] if item.get("sourceExcerpt") or item.get("snippet"))
+    compliance = opp.get("complianceRequirements") or []
+    if compliance:
+        sources.append("Compliance matrix")
+        chunks.extend(
+            f"{item.get('category') or 'General'}: {item.get('requirementText') or ''} [{item.get('status') or 'open'}, {item.get('verificationState') or 'needs-review'}]"
+            for item in compliance[:12]
+            if item.get("requirementText")
+        )
     return "\n".join(chunks), sources
 
 
@@ -64,6 +72,11 @@ def _source_items(opp: dict[str, Any], evidence: list[dict[str, Any]]) -> list[d
             state = str(item.get("verificationState") or "generated").strip()
             confidence = str(item.get("confidence") or 0)
             items.append({"source": f"Evidence citation: {section} ({state}, confidence {confidence})", "text": text})
+    for item in (opp.get("complianceRequirements") or [])[:16]:
+        text = str(item.get("requirementText") or "").strip()
+        if text:
+            source = f"Compliance matrix: {item.get('category') or 'General'} ({item.get('status') or 'open'}, {item.get('verificationState') or 'needs-review'})"
+            items.append({"source": source, "text": text})
     return items
 
 
@@ -76,7 +89,11 @@ _REQUIREMENT_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 
 def _requirement_entry(text: str, source: str, label: str, confidence: float) -> dict[str, Any]:
-    category = "source-fact" if source.startswith("Evidence citation") or source == "SAM.gov description" else "business-assumption"
+    category = (
+        "source-fact"
+        if source.startswith(("Evidence citation", "Compliance matrix")) or source == "SAM.gov description"
+        else "business-assumption"
+    )
     return {"text": text[:360], "source": source, "label": label, "confidence": confidence, "category": category}
 
 

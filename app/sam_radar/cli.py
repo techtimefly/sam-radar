@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 
 from .config import load_settings
 from .core import (
+    add_compliance_requirement,
     add_evidence,
     add_manual_opportunity,
     add_proposal_artifact,
@@ -23,15 +24,19 @@ from .core import (
     ai_settings,
     ai_subcontractor_templates,
     amendment_timeline,
+    compliance_list,
     create_amendment_task,
     create_proposal,
     delete_amendment_task,
     delete_evidence,
     delete_search_reference_code,
     evidence_list,
+    export_compliance_matrix,
     export_proposal_artifact_markdown,
+    generate_compliance_requirements,
     manual_search,
     mark_amendments_reviewed,
+    merge_compliance_requirements,
     notification_preview,
     parse_proposal_document,
     proposal_artifact_history,
@@ -39,15 +44,19 @@ from .core import (
     proposal_documents,
     proposal_list,
     refresh_report,
+    reject_compliance_requirement,
     remove_proposal_document,
     save_search_profile,
     save_search_reference_code,
     search_coach,
     search_intelligence,
+    split_compliance_requirement,
     update_amendment_task,
+    update_compliance_requirement,
     update_evidence,
     update_proposal,
     update_proposal_artifact,
+    verify_compliance_requirement,
     verify_evidence,
 )
 from .scheduler import Scheduler
@@ -78,6 +87,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/evidence/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self._send_json(200, evidence_list(self.settings, notice_id))
+            return
+        if parsed.path.startswith("/api/compliance/"):
+            notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self._send_json(200, compliance_list(self.settings, notice_id))
             return
         if parsed.path.startswith("/api/amendments/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
@@ -116,6 +129,21 @@ class RadarHandler(SimpleHTTPRequestHandler):
                 data = export["content"].encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Disposition", f"attachment; filename=\"{export['filename']}\"")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(404, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path.startswith("/api/compliance-export/"):
+            raw = unquote(parsed.path.rsplit("/", 1)[-1])
+            notice_id, _, suffix = raw.rpartition(".")
+            try:
+                export = export_compliance_matrix(self.settings, notice_id, suffix)
+                data = export["content"].encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", export["contentType"])
                 self.send_header("Content-Disposition", f"attachment; filename=\"{export['filename']}\"")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -220,6 +248,13 @@ class RadarHandler(SimpleHTTPRequestHandler):
             "/api/evidence/update",
             "/api/evidence/verify",
             "/api/evidence/delete",
+            "/api/compliance/add",
+            "/api/compliance/update",
+            "/api/compliance/verify",
+            "/api/compliance/reject",
+            "/api/compliance/generate",
+            "/api/compliance/merge",
+            "/api/compliance/split",
             "/api/amendments/task/create",
             "/api/amendments/task/update",
             "/api/amendments/task/delete",
@@ -254,6 +289,20 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = verify_evidence(self.settings, payload)
                 elif parsed.path == "/api/evidence/delete":
                     result = delete_evidence(self.settings, payload)
+                elif parsed.path == "/api/compliance/add":
+                    result = add_compliance_requirement(self.settings, payload)
+                elif parsed.path == "/api/compliance/update":
+                    result = update_compliance_requirement(self.settings, payload)
+                elif parsed.path == "/api/compliance/verify":
+                    result = verify_compliance_requirement(self.settings, payload)
+                elif parsed.path == "/api/compliance/reject":
+                    result = reject_compliance_requirement(self.settings, payload)
+                elif parsed.path == "/api/compliance/generate":
+                    result = generate_compliance_requirements(self.settings, payload)
+                elif parsed.path == "/api/compliance/merge":
+                    result = merge_compliance_requirements(self.settings, payload)
+                elif parsed.path == "/api/compliance/split":
+                    result = split_compliance_requirement(self.settings, payload)
                 elif parsed.path == "/api/amendments/task/create":
                     result = create_amendment_task(self.settings, payload)
                 elif parsed.path == "/api/amendments/task/update":
