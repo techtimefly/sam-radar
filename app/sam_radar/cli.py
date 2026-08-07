@@ -22,12 +22,16 @@ from .core import (
     ai_prime_templates,
     ai_settings,
     ai_subcontractor_templates,
+    amendment_timeline,
+    create_amendment_task,
     create_proposal,
+    delete_amendment_task,
     delete_evidence,
     delete_search_reference_code,
     evidence_list,
     export_proposal_artifact_markdown,
     manual_search,
+    mark_amendments_reviewed,
     notification_preview,
     parse_proposal_document,
     proposal_artifact_history,
@@ -40,6 +44,7 @@ from .core import (
     save_search_reference_code,
     search_coach,
     search_intelligence,
+    update_amendment_task,
     update_evidence,
     update_proposal,
     update_proposal_artifact,
@@ -73,6 +78,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/evidence/"):
             notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self._send_json(200, evidence_list(self.settings, notice_id))
+            return
+        if parsed.path.startswith("/api/amendments/"):
+            notice_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self._send_json(200, amendment_timeline(self.settings, notice_id))
             return
         if parsed.path == "/api/notifications/preview":
             try:
@@ -211,6 +220,10 @@ class RadarHandler(SimpleHTTPRequestHandler):
             "/api/evidence/update",
             "/api/evidence/verify",
             "/api/evidence/delete",
+            "/api/amendments/task/create",
+            "/api/amendments/task/update",
+            "/api/amendments/task/delete",
+            "/api/amendments/mark-reviewed",
         }:
             if not self.settings.app_write_token:
                 self._send_json(403, {"ok": False, "error": "APP_WRITE_TOKEN is not configured; proposal writes are disabled."})
@@ -241,6 +254,14 @@ class RadarHandler(SimpleHTTPRequestHandler):
                     result = verify_evidence(self.settings, payload)
                 elif parsed.path == "/api/evidence/delete":
                     result = delete_evidence(self.settings, payload)
+                elif parsed.path == "/api/amendments/task/create":
+                    result = create_amendment_task(self.settings, payload)
+                elif parsed.path == "/api/amendments/task/update":
+                    result = update_amendment_task(self.settings, payload)
+                elif parsed.path == "/api/amendments/task/delete":
+                    result = delete_amendment_task(self.settings, payload)
+                elif parsed.path == "/api/amendments/mark-reviewed":
+                    result = mark_amendments_reviewed(self.settings, payload)
                 else:
                     result = parse_proposal_document(self.settings, payload)
                 self._send_json(200, result)

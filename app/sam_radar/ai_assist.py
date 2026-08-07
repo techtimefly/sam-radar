@@ -209,6 +209,12 @@ def deterministic_gap_analysis(opp: dict[str, Any], evidence: list[dict[str, Any
         gaps.append(_gap("medium", "Past performance mapping needed", "Relevant experience or past performance language was detected.", "Map 2-3 qualifying projects to the stated work and evaluation language.", "SAM.gov description"))
     if _has_text(("due within 48 hours", "due this week"), " ".join(str(item) for item in opp.get("followUpReasons") or [])) or str(opp.get("urgency") or "").lower() == "high":
         gaps.append(_gap("high", "Compressed response window", "The opportunity has deadline pressure.", "Confirm whether there is enough time for attachments, teaming, pricing, and review before pursuing.", "Deadline analysis"))
+    for change in (opp.get("amendmentTimeline") or [])[:4]:
+        impact = str(change.get("impact") or "medium")
+        title = f"Review amendment: {change.get('field') or change.get('machineType') or 'change'}"
+        detail = str(change.get("explanation") or "A material opportunity revision was detected.")
+        action = f"Confirm source facts and update capture plan for {change.get('afterSummary') or 'the latest revision'}."
+        gaps.append(_gap("critical" if impact == "critical" else "high" if impact == "high" else "medium", title, detail, action, "Amendment intelligence"))
     if not (opp.get("workflowNextAction") or opp.get("nextAction") or ""):
         gaps.append(_gap("low", "Next action missing", "The opportunity has no recorded next action.", "Add the next concrete capture action and follow-up date.", "Local workflow"))
 
@@ -496,6 +502,11 @@ def deterministic_summary(opp: dict[str, Any], evidence: list[dict[str, Any]]) -
     overview_parts = _sentences(text, 2) or [str(opp.get("title") or "Opportunity summary is not available.")]
     fit = str(opp.get("fitReason") or "Review capability, NAICS/PSC, set-aside, deadline, and parsed document evidence.")
     action = str(opp.get("nextAction") or opp.get("workflowNextAction") or "Review the opportunity and confirm bid/no-bid posture.")
+    amendment_facts = [
+        f"{item.get('field') or item.get('machineType') or 'Amendment'!s} changed: {item.get('explanation') or ''!s} {item.get('afterSummary') or ''!s}".strip()
+        for item in (opp.get("amendmentTimeline") or [])[:5]
+    ]
+    amendment_actions = ["Review amendment impact and refresh proposal evidence before relying on prior citations."] if amendment_facts else []
     return {
         "overview": " ".join(overview_parts),
         "fit": fit,
@@ -503,9 +514,9 @@ def deterministic_summary(opp: dict[str, Any], evidence: list[dict[str, Any]]) -
         "recommendedAction": action,
         "evidence": evidence_bullets,
         "sources": sources,
-        "sourceFacts": evidence_bullets,
+        "sourceFacts": evidence_bullets + amendment_facts,
         "businessAssumptions": [fit],
-        "aiRecommendations": [action],
+        "aiRecommendations": [action] + amendment_actions,
     }
 
 

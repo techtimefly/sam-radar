@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import re
 import sqlite3
@@ -53,6 +54,7 @@ ARTIFACT_STATUSES = {"draft", "review", "approved", "archived"}
 ARTIFACT_FORMATS = {"markdown", "text"}
 EVIDENCE_STATES = {"generated", "needs-review", "verified", "rejected", "superseded"}
 EVIDENCE_METHODS = {"manual", "document-intake", "ai-assisted", "imported", "legacy-snippet"}
+AMENDMENT_TASK_STATUSES = {"open", "in-progress", "done", "blocked", "dismissed"}
 
 
 def proposal_stage_items(current_stage: str) -> list[dict[str, str]]:
@@ -77,6 +79,37 @@ def title_key(opp: dict) -> str:
 
 def clean_text(value: Any, limit: int = 2000) -> str:
     return str(value or "").strip()[:limit]
+
+
+def compact_text(value: Any, limit: int = 8000) -> str:
+    if isinstance(value, list):
+        value = " ".join(str(item or "") for item in value)
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+def content_digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def normalize_deadline(value: Any) -> str:
+    raw = str(value or "").strip().replace(" ", "T", 1)
+    if not raw:
+        return ""
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.UTC)
+        return parsed.astimezone(dt.UTC).replace(microsecond=0).isoformat()
+    except ValueError:
+        return compact_text(raw, 120).lower()
+
+
+def normalize_code(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).upper()
+
+
+def normalize_label(value: Any) -> str:
+    return compact_text(value, 1000).lower()
 
 
 def parse_documents(raw: Any) -> list[dict[str, Any]]:
@@ -311,7 +344,7 @@ class Store:
                   notice_id TEXT NOT NULL,
                   proposal_id INTEGER,
                   document_id INTEGER,
-                  revision_id TEXT NOT NULL DEFAULT '',
+                  revision_id TEXT,
                   page_section TEXT NOT NULL DEFAULT '',
                   source_excerpt TEXT NOT NULL,
                   extracted_claim TEXT NOT NULL DEFAULT '',
@@ -323,7 +356,8 @@ class Store:
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
                   FOREIGN KEY(proposal_id) REFERENCES proposal_workspaces(id) ON DELETE SET NULL,
-                  FOREIGN KEY(document_id) REFERENCES proposal_documents(id) ON DELETE SET NULL
+                  FOREIGN KEY(document_id) REFERENCES proposal_documents(id) ON DELETE SET NULL,
+                  FOREIGN KEY(revision_id) REFERENCES opportunity_revisions(revision_id) ON DELETE SET NULL
                 )
                 """
             )
@@ -408,6 +442,756 @@ class Store:
                 ON ai_audit_events (created_at DESC)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS opportunity_revisions (
+                  revision_id TEXT PRIMARY KEY,
+                  notice_id TEXT NOT NULL,
+                  content_hash TEXT NOT NULL,
+                  canonical_json TEXT NOT NULL,
+                  raw_summary_json TEXT NOT NULL DEFAULT '{}',
+                  created_at TEXT NOT NULL,
+                  UNIQUE(notice_id, content_hash)
+                )
+                """
+            )
+            evidence_columns = {row["name"] for row in conn.execute("PRAGMA table_info(evidence_citations)")}
+            if "revision_id" not in evidence_columns:
+                try:
+                    conn.execute(
+                        """
+                        ALTER TABLE evidence_citations
+                        ADD COLUMN revision_id TEXT REFERENCES opportunity_revisions(revision_id) ON DELETE SET NULL
+                        """
+                    )
+                except sqlite3.OperationalError:
+                    conn.execute("ALTER TABLE evidence_citations ADD COLUMN revision_id TEXT")
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_opportunity_revisions_notice
+                ON opportunity_revisions (notice_id, created_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_evidence_citations_revision
+                ON evidence_citations (notice_id, revision_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachment_snapshots (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  revision_id TEXT NOT NULL,
+                  notice_id TEXT NOT NULL,
+                  attachment_key TEXT NOT NULL,
+                  content_hash TEXT NOT NULL,
+                  metadata_json TEXT NOT NULL DEFAULT '{}',
+                  created_at TEXT NOT NULL,
+                  UNIQUE(revision_id, attachment_key),
+                  FOREIGN KEY(revision_id) REFERENCES opportunity_revisions(revision_id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_attachment_snapshots_notice
+                ON attachment_snapshots (notice_id, attachment_key)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS amendment_changes (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  from_revision_id TEXT NOT NULL,
+                  to_revision_id TEXT NOT NULL,
+                  field TEXT NOT NULL,
+                  change_type TEXT NOT NULL,
+                  machine_type TEXT NOT NULL,
+                  impact TEXT NOT NULL,
+                  before_summary TEXT NOT NULL DEFAULT '',
+                  after_summary TEXT NOT NULL DEFAULT '',
+                  detected_at TEXT NOT NULL,
+                  explanation TEXT NOT NULL DEFAULT '',
+                  material INTEGER NOT NULL DEFAULT 1,
+                  read_at TEXT NOT NULL DEFAULT '',
+                  UNIQUE(to_revision_id, machine_type, before_summary, after_summary),
+                  FOREIGN KEY(from_revision_id) REFERENCES opportunity_revisions(revision_id) ON DELETE CASCADE,
+                  FOREIGN KEY(to_revision_id) REFERENCES opportunity_revisions(revision_id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_amendment_changes_notice
+                ON amendment_changes (notice_id, detected_at DESC, id DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS amendment_review_tasks (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  notice_id TEXT NOT NULL,
+                  revision_id TEXT NOT NULL,
+                  change_id INTEGER,
+                  assignee TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL DEFAULT 'open',
+                  due_date TEXT NOT NULL DEFAULT '',
+                  notes TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY(revision_id) REFERENCES opportunity_revisions(revision_id) ON DELETE CASCADE,
+                  FOREIGN KEY(change_id) REFERENCES amendment_changes(id) ON DELETE SET NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_amendment_review_tasks_notice
+                ON amendment_review_tasks (notice_id, status, due_date, id)
+                """
+            )
+
+    def _canonical_attachment(self, doc: dict[str, Any], idx: int) -> dict[str, str]:
+        url = clean_text(doc.get("url") or doc.get("href") or doc.get("link") or doc.get("resourceUrl") or doc.get("source"), 1200)
+        title = compact_text(doc.get("title") or doc.get("label") or doc.get("name") or doc.get("filename") or f"Attachment {idx}", 300)
+        key_source = (url or f"{title}#{idx}").lower().rstrip("/")
+        return {
+            "key": hashlib.sha256(key_source.encode("utf-8")).hexdigest()[:24],
+            "url": url,
+            "title": title,
+            "type": compact_text(doc.get("type") or doc.get("contentType") or doc.get("mimeType"), 120).lower(),
+            "size": str(doc.get("size") or doc.get("sizeBytes") or ""),
+            "hash": clean_text(doc.get("hash") or doc.get("contentHash") or doc.get("sha256"), 160),
+        }
+
+    def _canonical_opportunity(self, opp: dict[str, Any]) -> dict[str, Any]:
+        raw_attachments: list[Any] = []
+        for key in ("resourceLinks", "attachments", "links", "documents"):
+            value = opp.get(key)
+            if isinstance(value, list):
+                raw_attachments.extend(value)
+        attachments = [
+            self._canonical_attachment(item, idx)
+            for idx, item in enumerate(raw_attachments[:50], 1)
+            if isinstance(item, dict) and (item.get("url") or item.get("href") or item.get("source") or item.get("title") or item.get("label"))
+        ]
+        attachments.sort(key=lambda item: item["key"])
+        contacts = opp.get("contacts") if isinstance(opp.get("contacts"), list) else []
+        normalized_contacts = [
+            {
+                "name": normalize_label(item.get("name") or item.get("fullName")) if isinstance(item, dict) else normalize_label(item),
+                "email": normalize_label(item.get("email")) if isinstance(item, dict) else "",
+                "phone": normalize_label(item.get("phone")) if isinstance(item, dict) else "",
+            }
+            for item in contacts[:20]
+        ]
+        normalized_contacts.sort(key=lambda item: (item["email"], item["name"], item["phone"]))
+        notice_type = compact_text(opp.get("type") or opp.get("noticeType"), 160)
+        status = compact_text(opp.get("status") or opp.get("active") or "", 160)
+        if "cancel" in notice_type.lower() or "cancel" in status.lower():
+            status = "cancelled"
+        return {
+            "noticeId": clean_text(opp.get("noticeId") or opp.get("notice_id"), 200),
+            "deadline": normalize_deadline(opp.get("responseDeadline") or opp.get("responseDeadLine") or opp.get("reponseDeadLine")),
+            "status": normalize_label(status or "active"),
+            "notice_type": normalize_label(notice_type),
+            "set_aside": normalize_code(opp.get("setAsideCode") or opp.get("typeOfSetAside") or opp.get("setAside")),
+            "naics": normalize_code(opp.get("naicsCode") or opp.get("naics")),
+            "psc": normalize_code(opp.get("classificationCode") or opp.get("psc")),
+            "description": normalize_label(opp.get("description") or opp.get("descriptionText") or opp.get("descriptionParagraphs")),
+            "contacts": normalized_contacts,
+            "attachments": attachments,
+        }
+
+    def _revision_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        canonical = json.loads(row["canonical_json"] or "{}")
+        return {
+            "revisionId": row["revision_id"],
+            "noticeId": row["notice_id"],
+            "contentHash": row["content_hash"],
+            "createdAt": row["created_at"],
+            "canonical": canonical,
+        }
+
+    def _summarize_value(self, field: str, value: Any) -> str:
+        if field == "attachments":
+            return f"{len(value or [])} attachment(s)"
+        if field == "contacts":
+            return f"{len(value or [])} contact(s)"
+        return compact_text(value, 240)
+
+    def _parse_normalized_deadline(self, value: Any) -> dt.datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = dt.datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.UTC)
+        return parsed.astimezone(dt.UTC)
+
+    def _deadline_change_spec(self, before: Any, after: Any) -> dict[str, str]:
+        before_text = str(before or "").strip()
+        after_text = str(after or "").strip()
+        before_dt = self._parse_normalized_deadline(before_text)
+        after_dt = self._parse_normalized_deadline(after_text)
+        if not before_text and after_text:
+            machine = "deadline_added"
+            impact = "high"
+            explanation = "Response deadline was added."
+        elif before_text and not after_text:
+            machine = "deadline_removed"
+            impact = "high"
+            explanation = "Response deadline was removed."
+        elif before_dt and after_dt:
+            contracted = after_dt < before_dt
+            machine = "deadline_contracted" if contracted else "deadline_extended"
+            impact = "critical" if contracted else "medium"
+            explanation = "Response deadline moved earlier." if contracted else "Response deadline moved later."
+        elif before_text != after_text:
+            machine = "deadline_unparseable_changed"
+            impact = "medium"
+            explanation = "Response deadline changed but could not be parsed into comparable instants."
+        else:
+            machine = "deadline_changed"
+            impact = "medium"
+            explanation = "Response deadline changed."
+        return {
+            "field": "deadline",
+            "change_type": machine,
+            "machine_type": machine,
+            "impact": impact,
+            "before_summary": self._summarize_value("deadline", before),
+            "after_summary": self._summarize_value("deadline", after),
+            "explanation": explanation,
+        }
+
+    def _attachment_identity(self, item: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+        return (
+            clean_text(item.get("key"), 80),
+            compact_text(item.get("url"), 1200).lower().rstrip("/"),
+            compact_text(item.get("title"), 300).lower(),
+            clean_text(item.get("hash"), 160).lower(),
+            clean_text(item.get("size"), 80),
+            compact_text(item.get("type"), 120).lower(),
+        )
+
+    def _unique_attachment_pairs(
+        self,
+        old_items: list[dict[str, Any]],
+        new_items: list[dict[str, Any]],
+        attr: str,
+    ) -> list[tuple[int, int]]:
+        old_values: dict[str, list[int]] = {}
+        new_values: dict[str, list[int]] = {}
+        for idx, item in enumerate(old_items):
+            value = (
+                compact_text(item.get(attr), 1200).lower().rstrip("/")
+                if attr == "url"
+                else compact_text(item.get(attr), 300).lower()
+            )
+            if value:
+                old_values.setdefault(value, []).append(idx)
+        for idx, item in enumerate(new_items):
+            value = (
+                compact_text(item.get(attr), 1200).lower().rstrip("/")
+                if attr == "url"
+                else compact_text(item.get(attr), 300).lower()
+            )
+            if value:
+                new_values.setdefault(value, []).append(idx)
+        pairs = []
+        for value in sorted(set(old_values) & set(new_values)):
+            if len(old_values[value]) == 1 and len(new_values[value]) == 1:
+                pairs.append((old_values[value][0], new_values[value][0]))
+        return pairs
+
+    def _match_attachments(
+        self,
+        old_items: list[dict[str, Any]],
+        new_items: list[dict[str, Any]],
+    ) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], list[dict[str, Any]], list[dict[str, Any]]]:
+        matched_old: set[int] = set()
+        matched_new: set[int] = set()
+        pairs: list[tuple[int, int]] = []
+
+        def add_pair(old_idx: int, new_idx: int) -> None:
+            if old_idx in matched_old or new_idx in matched_new:
+                return
+            matched_old.add(old_idx)
+            matched_new.add(new_idx)
+            pairs.append((old_idx, new_idx))
+
+        exact_old: dict[tuple[str, str, str, str, str, str], list[int]] = {}
+        exact_new: dict[tuple[str, str, str, str, str, str], list[int]] = {}
+        for idx, item in enumerate(old_items):
+            exact_old.setdefault(self._attachment_identity(item), []).append(idx)
+        for idx, item in enumerate(new_items):
+            exact_new.setdefault(self._attachment_identity(item), []).append(idx)
+        for identity in sorted(set(exact_old) & set(exact_new)):
+            old_candidates = exact_old[identity]
+            new_candidates = exact_new[identity]
+            for old_idx, new_idx in zip(old_candidates, new_candidates, strict=False):
+                add_pair(old_idx, new_idx)
+
+        for attr in ("url", "title", "hash"):
+            for old_idx, new_idx in self._unique_attachment_pairs(old_items, new_items, attr):
+                add_pair(old_idx, new_idx)
+
+        changed_pairs = [(old_items[old_idx], new_items[new_idx]) for old_idx, new_idx in sorted(pairs)]
+        removed = [item for idx, item in enumerate(old_items) if idx not in matched_old]
+        added = [item for idx, item in enumerate(new_items) if idx not in matched_new]
+        return changed_pairs, removed, added
+
+    def _change_specs(self, old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, str]]:
+        specs: list[dict[str, str]] = []
+        fields = ["deadline", "status", "notice_type", "set_aside", "naics", "psc", "description", "contacts"]
+        for field in fields:
+            before = old.get(field)
+            after = new.get(field)
+            if before == after:
+                continue
+            machine = f"{field}_changed"
+            impact = "low"
+            explanation = f"{field.replace('_', ' ').title()} changed."
+            if field == "deadline":
+                specs.append(self._deadline_change_spec(before, after))
+                continue
+            elif field == "status" and "cancel" in str(after):
+                machine = "status_cancelled"
+                impact = "critical"
+                explanation = "Opportunity appears to be cancelled."
+            elif field in {"set_aside", "naics"}:
+                impact = "high"
+                explanation = f"{field.replace('_', ' ').upper()} changed and may affect eligibility or fit."
+            elif field in {"psc", "notice_type", "description"}:
+                impact = "medium"
+            specs.append(
+                {
+                    "field": field,
+                    "change_type": machine,
+                    "machine_type": machine,
+                    "impact": impact,
+                    "before_summary": self._summarize_value(field, before),
+                    "after_summary": self._summarize_value(field, after),
+                    "explanation": explanation,
+                }
+            )
+        changed_attachments, removed_attachments, added_attachments = self._match_attachments(
+            old.get("attachments") or [],
+            new.get("attachments") or [],
+        )
+        for item in sorted(
+            added_attachments,
+            key=lambda candidate: (candidate.get("title") or "", candidate.get("url") or "", candidate.get("key") or ""),
+        ):
+            specs.append(
+                {
+                    "field": "attachments",
+                    "change_type": "attachment_added",
+                    "machine_type": "attachment_added",
+                    "impact": "high",
+                    "before_summary": "",
+                    "after_summary": item.get("title") or item.get("url") or item.get("key") or "",
+                    "explanation": "New attachment appeared; review for amendment instructions or changed requirements.",
+                }
+            )
+        for item in sorted(
+            removed_attachments,
+            key=lambda candidate: (candidate.get("title") or "", candidate.get("url") or "", candidate.get("key") or ""),
+        ):
+            specs.append(
+                {
+                    "field": "attachments",
+                    "change_type": "attachment_removed",
+                    "machine_type": "attachment_removed",
+                    "impact": "high",
+                    "before_summary": item.get("title") or item.get("url") or item.get("key") or "",
+                    "after_summary": "",
+                    "explanation": "Attachment was removed or superseded.",
+                }
+            )
+        for old_item, new_item in changed_attachments:
+            if old_item != new_item:
+                specs.append(
+                    {
+                        "field": "attachments",
+                        "change_type": "attachment_changed",
+                        "machine_type": "attachment_changed",
+                        "impact": "medium",
+                        "before_summary": old_item.get("title") or old_item.get("url") or old_item.get("key") or "",
+                        "after_summary": new_item.get("title") or new_item.get("url") or new_item.get("key") or "",
+                        "explanation": "Attachment metadata changed and may represent a revised document.",
+                    }
+                )
+        return specs
+
+    def capture_opportunity_revision(self, opp: dict[str, Any]) -> dict[str, Any]:
+        canonical = self._canonical_opportunity(opp)
+        notice_id = canonical["noticeId"]
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        digest = content_digest(canonical)
+        revision_id = f"{notice_id}:{digest[:16]}"
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT * FROM opportunity_revisions WHERE notice_id = ? AND content_hash = ?", (notice_id, digest)).fetchone()
+            if existing:
+                return {"created": False, "revision": self._revision_from_row(existing), "changes": []}
+            previous = conn.execute(
+                """
+                SELECT * FROM opportunity_revisions
+                WHERE notice_id = ?
+                ORDER BY datetime(created_at) DESC, rowid DESC
+                LIMIT 1
+                """,
+                (notice_id,),
+            ).fetchone()
+            raw_summary = {
+                "title": clean_text(opp.get("title"), 500),
+                "url": clean_text(opp.get("url") or opp.get("uiLink"), 1200),
+                "source": "sam.gov",
+            }
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO opportunity_revisions (revision_id, notice_id, content_hash, canonical_json, raw_summary_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (revision_id, notice_id, digest, json.dumps(canonical, sort_keys=True), json.dumps(raw_summary, sort_keys=True), now),
+            )
+            if not cur.rowcount:
+                existing = conn.execute("SELECT * FROM opportunity_revisions WHERE notice_id = ? AND content_hash = ?", (notice_id, digest)).fetchone()
+                return {"created": False, "revision": self._revision_from_row(existing), "changes": []}
+            for attachment in canonical["attachments"]:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO attachment_snapshots
+                      (revision_id, notice_id, attachment_key, content_hash, metadata_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (revision_id, notice_id, attachment["key"], content_digest(attachment), json.dumps(attachment, sort_keys=True), now),
+                )
+            changes: list[dict[str, Any]] = []
+            if previous:
+                old = json.loads(previous["canonical_json"] or "{}")
+                for spec in self._change_specs(old, canonical):
+                    cur = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO amendment_changes
+                          (notice_id, from_revision_id, to_revision_id, field, change_type, machine_type, impact,
+                           before_summary, after_summary, detected_at, explanation, material)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            notice_id,
+                            previous["revision_id"],
+                            revision_id,
+                            spec["field"],
+                            spec["change_type"],
+                            spec["machine_type"],
+                            spec["impact"],
+                            spec["before_summary"],
+                            spec["after_summary"],
+                            now,
+                            spec["explanation"],
+                            1 if spec["impact"] in {"critical", "high", "medium"} else 0,
+                        ),
+                    )
+                    if cur.rowcount:
+                        changes.append({**spec, "id": cur.lastrowid, "noticeId": notice_id, "detectedAt": now})
+            row = conn.execute("SELECT * FROM opportunity_revisions WHERE revision_id = ?", (revision_id,)).fetchone()
+        return {"created": True, "revision": self._revision_from_row(row), "changes": changes}
+
+    def opportunity_revisions(self, notice_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM opportunity_revisions WHERE notice_id = ? ORDER BY datetime(created_at) DESC, rowid DESC",
+                (notice_id,),
+            ).fetchall()
+        return [self._revision_from_row(row) for row in rows]
+
+    def _change_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "fromRevisionId": row["from_revision_id"],
+            "toRevisionId": row["to_revision_id"],
+            "field": row["field"],
+            "changeType": row["change_type"],
+            "machineType": row["machine_type"],
+            "impact": row["impact"],
+            "beforeSummary": row["before_summary"],
+            "afterSummary": row["after_summary"],
+            "detectedAt": row["detected_at"],
+            "explanation": row["explanation"],
+            "material": bool(row["material"]),
+            "readAt": row["read_at"],
+        }
+
+    def amendment_changes(self, notice_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM amendment_changes
+                WHERE notice_id = ?
+                ORDER BY datetime(detected_at) DESC, id DESC
+                LIMIT ?
+                """,
+                (notice_id, max(1, min(int(limit or 100), 500))),
+            ).fetchall()
+        return [self._change_from_row(row) for row in rows]
+
+    def mark_amendment_changes_reviewed(self, notice_id: str, change_ids: list[int] | None = None) -> dict[str, Any]:
+        notice_id = clean_text(notice_id, 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        now = utc_now()
+        with self.connect() as conn:
+            if change_ids is None:
+                cur = conn.execute(
+                    """
+                    UPDATE amendment_changes
+                    SET read_at = ?
+                    WHERE notice_id = ? AND material = 1 AND read_at = ''
+                    """,
+                    (now, notice_id),
+                )
+            else:
+                ids = [int(item) for item in change_ids]
+                if not ids:
+                    raise ValueError("changeIds must not be empty")
+                placeholders = ",".join("?" for _ in ids)
+                rows = conn.execute(
+                    f"SELECT id, notice_id FROM amendment_changes WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                if len(rows) != len(set(ids)):
+                    raise ValueError("changeId does not exist")
+                if any(row["notice_id"] != notice_id for row in rows):
+                    raise ValueError("changeId does not belong to noticeId")
+                cur = conn.execute(
+                    f"""
+                    UPDATE amendment_changes
+                    SET read_at = ?
+                    WHERE notice_id = ? AND material = 1 AND read_at = '' AND id IN ({placeholders})
+                    """,
+                    [now, notice_id, *ids],
+                )
+        return {"noticeId": notice_id, "reviewedCount": cur.rowcount, "readAt": now, "summary": self.amendment_summary(notice_id), "changes": self.amendment_changes(notice_id)}
+
+    def _attachment_document_tokens(self, row: sqlite3.Row) -> set[str]:
+        tokens = set()
+        values = dict(row)
+        for column in ("document_source", "document_label", "document_filename"):
+            value = compact_text(values.get(column, ""), 1200).lower().rstrip("/")
+            if value:
+                tokens.add(value)
+        return tokens
+
+    def _document_matches_attachment(self, document_tokens: set[str], attachment: dict[str, Any]) -> bool:
+        if not document_tokens:
+            return False
+        attachment_tokens = {
+            compact_text(attachment.get("url"), 1200).lower().rstrip("/"),
+            compact_text(attachment.get("title"), 300).lower(),
+        }
+        attachment_tokens = {token for token in attachment_tokens if token}
+        return bool(document_tokens & attachment_tokens)
+
+    def _citation_attachment_removed(self, row: sqlite3.Row, revisions: list[dict[str, Any]], latest_revision_id: str) -> bool:
+        document_tokens = self._attachment_document_tokens(row)
+        if not document_tokens:
+            return False
+        latest = next((item for item in revisions if item["revisionId"] == latest_revision_id), None)
+        latest_attachments = (latest or {}).get("canonical", {}).get("attachments") or []
+        latest_keys = {item.get("key") for item in latest_attachments}
+        for revision in revisions:
+            for attachment in revision.get("canonical", {}).get("attachments") or []:
+                if not self._document_matches_attachment(document_tokens, attachment):
+                    continue
+                if attachment.get("key") not in latest_keys:
+                    return True
+        return False
+
+    def stale_evidence_warnings(self, notice_id: str) -> dict[str, Any]:
+        revisions = list(reversed(self.opportunity_revisions(notice_id)))
+        latest = revisions[-1]["revisionId"] if revisions else ""
+        revision_index = {item["revisionId"]: idx for idx, item in enumerate(revisions)}
+        changes = self.amendment_changes(notice_id, limit=500)
+        with self.connect() as conn:
+            citations = conn.execute(
+                """
+                SELECT c.id, c.revision_id, c.document_id, c.page_section,
+                       d.source AS document_source, d.label AS document_label, d.filename AS document_filename
+                FROM evidence_citations c
+                LEFT JOIN proposal_documents d ON d.id = c.document_id
+                WHERE c.notice_id = ? AND c.verification_state != 'superseded'
+                """,
+                (notice_id,),
+            ).fetchall()
+        items = []
+        for row in citations:
+            reasons = []
+            rev = row["revision_id"]
+            attachment_removed = self._citation_attachment_removed(row, revisions, latest)
+            if latest and rev and rev != latest:
+                cited_idx = revision_index.get(rev, -1)
+                predating_changes = [
+                    change
+                    for change in changes
+                    if revision_index.get(change["toRevisionId"], 10**6) > cited_idx and change["material"]
+                ]
+                if any(change["field"] != "attachments" or change["machineType"] != "attachment_removed" or attachment_removed for change in predating_changes):
+                    reasons.append("Citation predates a material revision")
+            elif latest and not rev and changes:
+                reasons.append("Citation is not tied to the latest immutable revision")
+            if attachment_removed:
+                reasons.append("cited document may have been removed or superseded")
+            if reasons:
+                items.append({"citationId": row["id"], "revisionId": rev, "reason": "; ".join(reasons), "pageSection": row["page_section"]})
+        return {"count": len(items), "items": items}
+
+    def amendment_summary(self, notice_id: str) -> dict[str, Any]:
+        changes = self.amendment_changes(notice_id)
+        stale = self.stale_evidence_warnings(notice_id)
+        return {
+            "revisionCount": len(self.opportunity_revisions(notice_id)),
+            "changeCount": len(changes),
+            "materialChangeCount": sum(1 for item in changes if item["material"]),
+            "unreadCount": sum(1 for item in changes if item["material"] and not item["readAt"]),
+            "staleEvidenceCount": stale["count"],
+        }
+
+    def amendment_timeline(self, notice_id: str) -> dict[str, Any]:
+        return {
+            "noticeId": notice_id,
+            "summary": self.amendment_summary(notice_id),
+            "revisions": self.opportunity_revisions(notice_id),
+            "changes": self.amendment_changes(notice_id),
+            "staleEvidenceWarnings": self.stale_evidence_warnings(notice_id),
+            "tasks": self.amendment_tasks(notice_id),
+        }
+
+    def _task_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "noticeId": row["notice_id"],
+            "revisionId": row["revision_id"],
+            "changeId": row["change_id"],
+            "assignee": row["assignee"],
+            "status": row["status"],
+            "dueDate": row["due_date"],
+            "notes": row["notes"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    def _validate_amendment_task_refs(self, conn: sqlite3.Connection, notice_id: str, revision_id: str, change_id: int | None = None) -> None:
+        revision = conn.execute("SELECT notice_id FROM opportunity_revisions WHERE revision_id = ?", (revision_id,)).fetchone()
+        if not revision:
+            raise ValueError("revisionId does not exist")
+        if revision["notice_id"] != notice_id:
+            raise ValueError("revisionId does not belong to noticeId")
+        if change_id:
+            change = conn.execute("SELECT notice_id, to_revision_id FROM amendment_changes WHERE id = ?", (change_id,)).fetchone()
+            if not change:
+                raise ValueError("changeId does not exist")
+            if change["notice_id"] != notice_id or change["to_revision_id"] != revision_id:
+                raise ValueError("changeId does not belong to noticeId/revisionId")
+
+    def create_amendment_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        notice_id = clean_text(payload.get("noticeId") or payload.get("notice_id"), 200)
+        revision_id = clean_text(payload.get("revisionId") or payload.get("revision_id"), 260)
+        if not notice_id or not revision_id:
+            raise ValueError("noticeId and revisionId are required")
+        status = clean_text(payload.get("status") or "open", 40).lower()
+        if status not in AMENDMENT_TASK_STATUSES:
+            raise ValueError("status is invalid")
+        change_id = payload.get("changeId") or payload.get("change_id")
+        change_id = int(change_id) if change_id not in (None, "") else None
+        now = utc_now()
+        with self.connect() as conn:
+            self._validate_amendment_task_refs(conn, notice_id, revision_id, change_id)
+            cur = conn.execute(
+                """
+                INSERT INTO amendment_review_tasks
+                  (notice_id, revision_id, change_id, assignee, status, due_date, notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    notice_id,
+                    revision_id,
+                    change_id,
+                    clean_text(payload.get("assignee"), 200),
+                    status,
+                    clean_text(payload.get("dueDate") or payload.get("due_date"), 40),
+                    clean_text(payload.get("notes"), 3000),
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM amendment_review_tasks WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return self._task_from_row(row)
+
+    def update_amendment_task(self, task_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as conn:
+            existing = conn.execute("SELECT * FROM amendment_review_tasks WHERE id = ?", (int(task_id),)).fetchone()
+            if not existing:
+                raise ValueError("task does not exist")
+            notice_id = clean_text(payload.get("noticeId") or payload.get("notice_id") or existing["notice_id"], 200)
+            if notice_id != existing["notice_id"]:
+                raise ValueError("task does not belong to noticeId")
+            revision_id = clean_text(payload.get("revisionId") or payload.get("revision_id") or existing["revision_id"], 260)
+            change_id = payload.get("changeId") or payload.get("change_id")
+            change_id = int(change_id) if change_id not in (None, "") else existing["change_id"]
+            self._validate_amendment_task_refs(conn, notice_id, revision_id, change_id)
+            status = clean_text(payload.get("status") or existing["status"], 40).lower()
+            if status not in AMENDMENT_TASK_STATUSES:
+                raise ValueError("status is invalid")
+            conn.execute(
+                """
+                UPDATE amendment_review_tasks
+                SET revision_id = ?, change_id = ?, assignee = ?, status = ?, due_date = ?, notes = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    revision_id,
+                    change_id,
+                    clean_text(payload.get("assignee"), 200) if "assignee" in payload else existing["assignee"],
+                    status,
+                    clean_text(payload.get("dueDate") or payload.get("due_date"), 40) if ("dueDate" in payload or "due_date" in payload) else existing["due_date"],
+                    clean_text(payload.get("notes"), 3000) if "notes" in payload else existing["notes"],
+                    now,
+                    int(task_id),
+                ),
+            )
+            row = conn.execute("SELECT * FROM amendment_review_tasks WHERE id = ?", (int(task_id),)).fetchone()
+        return self._task_from_row(row)
+
+    def delete_amendment_task(self, task_id: int, notice_id: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM amendment_review_tasks WHERE id = ?", (int(task_id),)).fetchone()
+            if not row:
+                raise ValueError("task does not exist")
+            if row["notice_id"] != notice_id:
+                raise ValueError("task does not belong to noticeId")
+            task = self._task_from_row(row)
+            conn.execute("DELETE FROM amendment_review_tasks WHERE id = ?", (int(task_id),))
+        return task
+
+    def amendment_tasks(self, notice_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM amendment_review_tasks WHERE notice_id = ? ORDER BY status, due_date, id",
+                (notice_id,),
+            ).fetchall()
+        return [self._task_from_row(row) for row in rows]
 
     def _validate_evidence_payload(self, payload: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
         notice_id = clean_text(payload.get("noticeId") or payload.get("notice_id"), 200)
@@ -434,7 +1218,7 @@ class Store:
             "notice_id": notice_id,
             "proposal_id": int(proposal_id) if proposal_id not in (None, "") else None,
             "document_id": int(document_id) if document_id not in (None, "") else None,
-            "revision_id": clean_text(payload.get("revisionId") or payload.get("revision_id"), 160),
+            "revision_id": clean_text(payload.get("revisionId") or payload.get("revision_id"), 160) or None,
             "page_section": clean_text(payload.get("pageSection") or payload.get("page_section") or payload.get("section"), 300),
             "source_excerpt": excerpt,
             "extracted_claim": clean_text(payload.get("extractedClaim") or payload.get("extracted_claim"), 2000),
@@ -445,6 +1229,12 @@ class Store:
         }
 
     def _validate_evidence_references(self, conn: sqlite3.Connection, values: dict[str, Any]) -> None:
+        if values["revision_id"] is not None:
+            revision = conn.execute("SELECT notice_id FROM opportunity_revisions WHERE revision_id = ?", (values["revision_id"],)).fetchone()
+            if not revision:
+                raise ValueError("revisionId does not exist")
+            if revision["notice_id"] != values["notice_id"]:
+                raise ValueError("revisionId does not belong to noticeId")
         if values["proposal_id"] is not None:
             proposal = conn.execute("SELECT notice_id FROM proposal_workspaces WHERE id = ?", (values["proposal_id"],)).fetchone()
             if not proposal:
