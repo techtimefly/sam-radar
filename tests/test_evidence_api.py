@@ -59,12 +59,46 @@ def test_evidence_api_read_and_write_auth_boundary(tmp_path: Path):
 
         status, verified = _json(
             f"{base}/api/evidence/verify",
-            {"evidenceId": created["evidence"]["id"], "state": "verified", "verifier": "Lead"},
+            {"noticeId": "opp-api-1", "evidenceId": created["evidence"]["id"], "state": "verified", "verifier": "Lead"},
             token="secret",
         )
         assert status == 200
         assert verified["evidence"]["verificationState"] == "verified"
         assert verified["evidence"]["verifier"] == "Lead"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_evidence_verify_requires_notice_scope_and_rejects_cross_notice(tmp_path: Path):
+    settings = Settings(sam_gov_api_key="test", data_dir=tmp_path / "data", reports_dir=tmp_path / "reports", app_write_token="secret")
+    settings.reports_dir.mkdir()
+    store = Store(settings.data_dir / "sam-radar.sqlite3")
+    citation = store.create_evidence_citation({"noticeId": "opp-api-scope", "sourceExcerpt": "Scoped citation."})
+    other = store.create_evidence_citation({"noticeId": "opp-api-other", "sourceExcerpt": "Other citation."})
+    server, base = _serve(settings)
+    try:
+        for payload, expected in [
+            ({"evidenceId": citation["id"], "state": "verified"}, "noticeId is required"),
+            ({"noticeId": "opp-api-scope", "evidenceId": other["id"], "state": "verified"}, "evidenceId does not belong to noticeId"),
+        ]:
+            try:
+                _json(f"{base}/api/evidence/verify", payload, token="secret")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 400
+                assert expected in exc.read().decode("utf-8")
+            else:
+                raise AssertionError(f"Expected {expected}")
+
+        status, verified = _json(
+            f"{base}/api/evidence/verify",
+            {"noticeId": "opp-api-scope", "evidenceId": citation["id"], "state": "verified", "verifier": "Lead"},
+            token="secret",
+        )
+        assert status == 200
+        assert verified["evidence"]["noticeId"] == "opp-api-scope"
+        assert verified["evidence"]["verificationState"] == "verified"
+        assert [item["noticeId"] for item in verified["items"]] == ["opp-api-scope"]
     finally:
         server.shutdown()
         server.server_close()

@@ -741,14 +741,17 @@ def update_evidence(settings: Settings, payload: dict) -> dict:
 
 
 def verify_evidence(settings: Settings, payload: dict) -> dict:
+    notice_id = str(payload.get("noticeId") or "").strip()
+    if not notice_id:
+        raise ValueError("noticeId is required")
     evidence_id = int(payload.get("evidenceId") or payload.get("id") or 0)
     if not evidence_id:
         raise ValueError("evidenceId is required")
     state = str(payload.get("verificationState") or payload.get("state") or "verified")
     verifier = str(payload.get("verifier") or "")
     store = Store(settings.data_dir / "sam-radar.sqlite3")
-    evidence = store.verify_evidence_citation(evidence_id, state, verifier)
-    return {"ok": True, "evidence": evidence, "items": store.evidence_citations(evidence["noticeId"])}
+    evidence = store.verify_evidence_citation(notice_id, evidence_id, state, verifier)
+    return {"ok": True, "evidence": evidence, "items": store.evidence_citations(notice_id)}
 
 
 def delete_evidence(settings: Settings, payload: dict) -> dict:

@@ -38,7 +38,7 @@ POST /api/evidence/verify
 POST /api/evidence/delete
 ```
 
-All SQL uses parameter binding. Invalid confidence, verification state, extraction method, missing `noticeId`, or missing source excerpt returns a validation error.
+All SQL uses parameter binding. Invalid confidence, verification state, extraction method, missing `noticeId`, or missing source excerpt returns a validation error. Evidence verification is server-side notice-scoped: `POST /api/evidence/verify` requires `{ noticeId, evidenceId, state, verifier }`, and the store rejects evidence IDs that do not belong to the supplied notice.
 
 ## Verification Workflow
 
