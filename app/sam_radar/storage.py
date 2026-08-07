@@ -2954,7 +2954,16 @@ class Store:
                 self._add_event(conn, existing["notice_id"], "evidence_verified", existing["verification_state"], values["verification_state"], "Evidence verification state changed", now)
         return self.evidence_citation(evidence_id) or {}
 
-    def verify_evidence_citation(self, evidence_id: int, state: str, verifier: str = "") -> dict[str, Any]:
+    def verify_evidence_citation(self, notice_id: str, evidence_id: int, state: str, verifier: str = "") -> dict[str, Any]:
+        notice_id = clean_text(notice_id, 200)
+        if not notice_id:
+            raise ValueError("noticeId is required")
+        with self.connect() as conn:
+            row = conn.execute("SELECT notice_id FROM evidence_citations WHERE id = ?", (evidence_id,)).fetchone()
+            if not row:
+                raise ValueError("evidence citation does not exist")
+            if row["notice_id"] != notice_id:
+                raise ValueError("evidenceId does not belong to noticeId")
         return self.update_evidence_citation(evidence_id, {"verificationState": state, "verifier": verifier})
 
     def delete_evidence_citation(self, evidence_id: int) -> dict[str, Any]:

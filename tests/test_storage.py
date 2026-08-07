@@ -220,7 +220,7 @@ def test_evidence_citation_crud_verification_and_legacy_aliases(tmp_path: Path):
     assert citation["section"] == "PWS 3.1"
     assert store.evidence_citations("opp-cite-1")[0]["extractedClaim"] == "Secure engineering support is required."
 
-    verified = store.verify_evidence_citation(citation["id"], "verified", "Capture Lead")
+    verified = store.verify_evidence_citation("opp-cite-1", citation["id"], "verified", "Capture Lead")
     assert verified["verificationState"] == "verified"
     assert verified["reviewed"] is True
     assert verified["verifier"] == "Capture Lead"
@@ -351,7 +351,7 @@ def test_replace_evidence_snippets_preserves_verified_unchanged_citation_review_
         [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}],
     )
     original = store.evidence_citations("opp-reparse-verified", include_legacy=False)[0]
-    verified = store.verify_evidence_citation(original["id"], "verified", "Capture Lead")
+    verified = store.verify_evidence_citation("opp-reparse-verified", original["id"], "verified", "Capture Lead")
 
     store.replace_evidence_snippets(
         "opp-reparse-verified",
@@ -377,7 +377,7 @@ def test_replace_evidence_snippets_preserves_rejected_unchanged_citation_review_
         [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}],
     )
     original = store.evidence_citations("opp-reparse-rejected", include_legacy=False)[0]
-    rejected = store.verify_evidence_citation(original["id"], "rejected", "Capture Lead")
+    rejected = store.verify_evidence_citation("opp-reparse-rejected", original["id"], "rejected", "Capture Lead")
 
     store.replace_evidence_snippets(
         "opp-reparse-rejected",
@@ -403,7 +403,7 @@ def test_replace_evidence_snippets_supersedes_changed_citation_with_coherent_rev
         [{"section": "A", "snippet": "Offeror must submit a plan.", "confidence": 0.8}],
     )
     original = store.evidence_citations("opp-reparse-changed", include_legacy=False)[0]
-    verified = store.verify_evidence_citation(original["id"], "verified", "Capture Lead")
+    verified = store.verify_evidence_citation("opp-reparse-changed", original["id"], "verified", "Capture Lead")
 
     store.replace_evidence_snippets(
         "opp-reparse-changed",

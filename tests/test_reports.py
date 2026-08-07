@@ -1,8 +1,12 @@
+import datetime as dt
+import json
 import re
 import subprocess
 import textwrap
 from pathlib import Path
 
+from sam_radar import reports as reports_module
+from sam_radar.command_center import build_command_center
 from sam_radar.config import BusinessProfile, Settings
 from sam_radar.reports import build_csv_report, build_html_report, build_report_payload, write_reports
 
@@ -16,6 +20,13 @@ def _extract_report_script(html: str) -> str:
 def _extract_one_line_js_function(script: str, name: str) -> str:
     start = script.index(f"function {name}(")
     return script[start : script.index("\n", start)]
+
+
+class FixedReportDatetime(dt.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        instant = dt.datetime(2026, 8, 7, 5, 30, tzinfo=dt.UTC)
+        return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
 
 
 def test_report_uses_configured_business_name_and_normalized_time(tmp_path: Path):
@@ -114,6 +125,411 @@ def test_report_renders_compliance_matrix_controls_and_js_syntax(tmp_path: Path)
     assert "window.confirm('Split this compliance requirement?')" in html
 
     subprocess.run(["node", "--check"], input=script, text=True, check=True)
+
+
+def test_report_adds_primary_command_center_view_and_safe_actions(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    report = build_report_payload(
+        {
+            "postedFrom": "08/01/2026",
+            "postedTo": "08/04/2026",
+            "matches": [
+                {
+                    "noticeId": "abc-123",
+                    "title": "Security <script>alert(1)</script>",
+                    "organization": "Unsafe <b>Agency</b>",
+                    "score": 13,
+                    "recommendation": "Pursue",
+                    "workflowStatus": "new",
+                    "responseDeadline": "2026-08-07T01:00:00Z",
+                    "evidenceCitations": [{"id": 4, "verificationState": "needs-review"}],
+                    "complianceRequirements": [{"id": 7, "status": "open", "verificationState": "needs-review"}],
+                }
+            ],
+            "errors": [],
+        },
+        profile,
+        settings,
+        unseen=[],
+    )
+    html = build_html_report(report)
+    script = _extract_report_script(html)
+
+    assert report["commandCenter"]["metrics"]["highFitUnreviewed"] == 1
+    assert 'data-view="command"' in html
+    assert 'id="command-view"' in html
+    assert "Pursuit Command Center" in html
+    assert "Do Today" in html
+    assert "Portfolio Health" in html
+    assert "Recent Intelligence" in html
+    assert "command-action" in html
+    assert "command-quick-action" in html
+    assert "command-action-message" in html
+    assert "Security \\u003cscript>alert(1)\\u003c/script>" in html
+    assert "Security <script>" not in html
+    assert "Unsafe <b>Agency</b>" not in html
+    assert "function commandCenterHtml" in html
+    assert "function routeCommandTarget" in html
+    assert "function runCommandQuickAction" in html
+    assert "/api/status/" in html
+    assert "/api/evidence/verify" in html
+    assert "/api/amendments/mark-reviewed" in html
+    assert "/api/compliance/verify" in html
+    assert "/api/proposals/stage" in html
+    assert "renderCommandCenter()" in html
+    assert "@media(max-width:860px)" in html
+
+    subprocess.run(["node", "--check"], input=script, text=True, check=True)
+
+
+def test_report_command_center_js_routes_and_mutates_with_token(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    report = build_report_payload(
+        {
+            "postedFrom": "08/01/2026",
+            "postedTo": "08/04/2026",
+            "matches": [
+                {
+                    "noticeId": "abc",
+                    "title": "Security Support",
+                    "workflowStatus": "new",
+                    "workflowPriority": "normal",
+                    "score": 13,
+                    "responseDeadline": "2026-08-07T01:00:00Z",
+                    "evidenceCitations": [{"id": 4, "verificationState": "needs-review"}],
+                    "amendmentSummary": {"materialChangeCount": 1, "unreadCount": 1, "staleEvidenceCount": 0},
+                    "amendmentTimeline": [{"id": 5, "material": True, "readAt": ""}],
+                    "complianceRequirements": [{"id": 7, "status": "open", "verificationState": "needs-review"}],
+                    "proposal": {"id": 1, "stage": "requirements", "stageLabel": "Requirements"},
+                }
+            ],
+            "errors": [],
+        },
+        profile,
+        settings,
+        unseen=[],
+    )
+    script = _extract_report_script(build_html_report(report))
+    helpers = "\n".join(
+        [
+            _extract_one_line_js_function(script, "escapeHtml"),
+            _extract_one_line_js_function(script, "icon"),
+            _extract_one_line_js_function(script, "iconLabel"),
+            _extract_one_line_js_function(script, "safeClassToken"),
+            _extract_one_line_js_function(script, "commandActionHtml"),
+            _extract_one_line_js_function(script, "commandCenterHtml"),
+            _extract_one_line_js_function(script, "routeCommandTarget"),
+            _extract_one_line_js_function(script, "writeCommandJson"),
+            _extract_one_line_js_function(script, "commandKindsForQuickAction"),
+            _extract_one_line_js_function(script, "rebuildCommandCenter"),
+            _extract_one_line_js_function(script, "syncCommandCenterAfterAction"),
+            _extract_one_line_js_function(script, "setCommandStatus"),
+            _extract_one_line_js_function(script, "proposalAdjacentStage"),
+            _extract_one_line_js_function(script, "runCommandQuickAction"),
+            _extract_one_line_js_function(script, "renderCommandCenter"),
+        ]
+    )
+    js = textwrap.dedent(
+        f"""
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        const report = {json.dumps(report)};
+        const byId = new Map(report.matches.map(o => [String(o.noticeId), o]));
+        const tokenPanel = {{classList: {{add(value) {{ this.value = value; }}}}}};
+        function token() {{ return global.currentToken || ''; }}
+        let opened = [];
+        function openDetail(id, origin) {{ opened.push(['detail', id, origin]); }}
+        function renderProposalWorkspace(id) {{ opened.push(['proposal', id]); }}
+        function renderProposals() {{ opened.push(['proposals']); }}
+        function repaintAmendmentPanel() {{ opened.push(['amendments']); }}
+        function repaintCompliance() {{ opened.push(['compliance']); }}
+        function syncAmendments(id, amendments) {{ byId.get(id).amendmentSummary = amendments.summary; }}
+        function syncCompliance(id, requirements) {{ byId.get(id).complianceRequirements = requirements; }}
+        let requests = [];
+        global.fetch = async (url, options) => {{
+          requests.push([url, JSON.parse(options.body), options.headers['X-SAM-RADAR-TOKEN']]);
+          return {{ok:true, headers:{{get(){{ return 'application/json'; }}}}, json: async () => {{
+            if (url === '/api/evidence/verify') return {{ok:true, evidence:{{id:4, verificationState:'verified'}}, items:[{{id:4, verificationState:'verified'}}]}};
+            if (url === '/api/amendments/mark-reviewed') return {{ok:true, amendments:{{summary:{{materialChangeCount:1, unreadCount:0, staleEvidenceCount:0}}}}}};
+            if (url === '/api/compliance/verify') return {{ok:true, requirements:[{{id:7, status:'satisfied', verificationState:'verified'}}]}};
+            if (url === '/api/proposals/stage') return {{ok:true, proposal:{{id:1, stage:'draft', stageLabel:'Draft'}}}};
+          if (url.startsWith('/api/status/')) return {{ok:true, workflow:{{status:JSON.parse(options.body).status, priority:'normal', owner:'Lead', nextAction:'', followUpAt:'2026-08-08', notes:'', decisionReason:'', noBidReason:JSON.parse(options.body).noBidReason, noBidDetail:'', documents:[]}}}};
+            return {{ok:false, error:'unexpected'}};
+          }}}};
+        }};
+        let commandHost = {{innerHTML:'', querySelectorAll() {{ return []; }}}};
+        const document = {{
+          getElementById(id) {{ return id === 'command-center' ? commandHost : null; }},
+          querySelector(selector) {{ return {{click() {{ opened.push(['view', selector]); }}}}; }},
+          querySelectorAll() {{ return []; }}
+        }};
+        const window = {{confirm() {{ return true; }}}};
+        const CSS = {{escape(value) {{ return String(value); }}}};
+        const localStorage = {{getItem() {{ return ''; }}}};
+        function setStatusState(el,state,message) {{ el.state = state; el.textContent = message; }}
+        async function readJsonResponse(res) {{ return await res.json(); }}
+        function refreshReportInPlace() {{ opened.push(['refresh']); }}
+        function saveWorkflow() {{ throw new Error('saveWorkflow should not be used by command quick actions'); }}
+        function syncCard(id, workflow) {{ Object.assign(byId.get(id), {{workflowStatus:workflow.status, workflowOwner:workflow.owner, workflowFollowUpAt:workflow.followUpAt, workflowNoBidReason:workflow.noBidReason}}); }}
+        {helpers}
+        renderCommandCenter();
+        assert(commandHost.innerHTML.includes('Pursuit Command Center'), 'command center renders');
+        assert(!commandHost.innerHTML.includes('<script>'), 'unsafe title remains escaped in command center');
+        routeCommandTarget({{view:'proposals', noticeId:'abc', surface:'proposal-workspace'}});
+        routeCommandTarget({{view:'command', noticeId:'abc', surface:'opportunity-detail'}});
+        assert(JSON.stringify(opened).includes('proposal'), 'proposal target opens workspace');
+        assert(JSON.stringify(opened).includes('detail'), 'detail target opens opportunity');
+
+        try {{
+          await runCommandQuickAction({{action:'assign-owner', noticeId:'abc'}}, {{textContent:''}});
+        }} catch (err) {{
+          assert(err.message === 'Token required', 'missing token blocks writes');
+        }}
+        global.currentToken = 'secret';
+        const evidenceBefore = report.commandCenter.doToday.filter(item => ['stale-evidence','evidence-unverified'].includes(item.kind)).length;
+        await runCommandQuickAction({{action:'verify-evidence', noticeId:'abc'}}, {{textContent:''}});
+        assert(evidenceBefore > 0, 'evidence actions exist before quick action');
+        assert(report.commandCenter.doToday.every(item => !['stale-evidence','evidence-unverified'].includes(item.kind)), 'evidence actions are removed after verification');
+        await runCommandQuickAction({{action:'review-amendment', noticeId:'abc'}}, {{textContent:''}});
+        assert(report.commandCenter.recentIntelligence.length === 0, 'reviewed amendments are removed from recent intelligence');
+        await runCommandQuickAction({{action:'open-compliance', noticeId:'abc'}}, {{textContent:''}});
+        await runCommandQuickAction({{action:'advance-proposal', noticeId:'abc'}}, {{textContent:''}});
+        await runCommandQuickAction({{action:'assign-owner', noticeId:'abc'}}, {{textContent:''}});
+        await runCommandQuickAction({{action:'set-follow-up', noticeId:'abc'}}, {{textContent:''}});
+        await runCommandQuickAction({{action:'no-bid', noticeId:'abc'}}, {{textContent:''}});
+        assert(requests.every(item => item[2] === 'secret'), 'every mutation uses APP_WRITE_TOKEN header');
+        assert(requests.map(item => item[0]).includes('/api/evidence/verify'), 'evidence verify endpoint used');
+        assert(requests.map(item => item[0]).includes('/api/amendments/mark-reviewed'), 'amendment endpoint used');
+        assert(!requests.map(item => item[0]).includes('/api/compliance/verify'), 'open compliance does not verify rows');
+        assert(requests.map(item => item[0]).includes('/api/proposals/stage'), 'proposal stage endpoint used');
+        assert(requests.map(item => item[0]).includes('/api/status/abc'), 'workflow endpoint used');
+        assert(report.commandCenter.doToday.length === 0, 'notice command actions are removed after no-bid');
+        assert(report.commandCenter.statusMessage === 'No-bid saved', 'command center carries accessible repaint status');
+        """
+    )
+    subprocess.run(["node", "--input-type=module", "-e", js], check=True)
+
+
+def test_report_command_center_follow_up_date_only_uses_configured_local_day_in_python_and_generated_js(
+    tmp_path: Path, monkeypatch
+):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    generated = dt.datetime(2026, 8, 7, 5, 30, tzinfo=dt.UTC)
+    matches = [
+        {
+            "noticeId": "tomorrow-local",
+            "title": "Tomorrow Local",
+            "workflowStatus": "pursue",
+            "workflowOwner": "Lead",
+            "workflowNextAction": "Call partner",
+            "workflowFollowUpAt": "2026-08-07",
+            "responseDeadline": "2026-08-20T17:00:00Z",
+        },
+        {
+            "noticeId": "today-local",
+            "title": "Today Local",
+            "workflowStatus": "pursue",
+            "workflowOwner": "Lead",
+            "workflowNextAction": "Call partner",
+            "workflowFollowUpAt": "2026-08-06",
+            "responseDeadline": "2026-08-20T17:00:00Z",
+        },
+        {
+            "noticeId": "malformed-follow-up",
+            "title": "Malformed Follow-Up",
+            "workflowStatus": "pursue",
+            "workflowOwner": "Lead",
+            "workflowNextAction": "Call partner",
+            "workflowFollowUpAt": "not a date",
+            "responseDeadline": "2026-08-20T17:00:00Z",
+        },
+    ]
+    python_center = build_command_center(matches, now=generated, timezone="America/Denver")
+    assert [
+        item["noticeId"] for item in python_center["doToday"] if item["kind"] == "follow-up-overdue"
+    ] == ["today-local"]
+
+    monkeypatch.setattr(reports_module.dt, "datetime", FixedReportDatetime)
+    report = build_report_payload(
+        {"postedFrom": "08/01/2026", "postedTo": "08/04/2026", "matches": matches, "errors": []},
+        profile,
+        settings,
+        unseen=[],
+    )
+    assert report["summary"]["generatedAt"] == "2026-08-06T23:30:00-06:00"
+    assert [
+        item["noticeId"] for item in report["commandCenter"]["doToday"] if item["kind"] == "follow-up-overdue"
+    ] == ["today-local"]
+
+    script = _extract_report_script(build_html_report(report))
+    js = textwrap.dedent(
+        f"""
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        const report = {json.dumps(report)};
+        {_extract_one_line_js_function(script, "rebuildCommandCenter")}
+        rebuildCommandCenter();
+        const overdue = report.commandCenter.doToday
+          .filter(item => item.kind === 'follow-up-overdue')
+          .map(item => item.noticeId);
+        assert(JSON.stringify(overdue) === JSON.stringify(['today-local']), 'generated JS follow-up parity failed: '+JSON.stringify(overdue));
+        assert(!overdue.includes('tomorrow-local'), '2026-08-07 is not due on configured local 2026-08-06');
+        assert(!overdue.includes('malformed-follow-up'), 'malformed follow-up dates remain ignored');
+        """
+    )
+    subprocess.run(["node", "--input-type=module", "-e", js], check=True)
+
+
+def test_report_command_center_quick_actions_recompute_from_current_report_state(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    stage_items = [
+        {"key": "intent", "label": "Intent", "state": "complete"},
+        {"key": "intake", "label": "Intake", "state": "complete"},
+        {"key": "docs", "label": "Docs", "state": "complete"},
+        {"key": "requirements", "label": "Requirements", "state": "current"},
+        {"key": "gaps", "label": "Gaps", "state": "pending"},
+        {"key": "strategy", "label": "Strategy", "state": "pending"},
+        {"key": "draft", "label": "Draft", "state": "pending"},
+        {"key": "review", "label": "Review", "state": "pending"},
+    ]
+    report = build_report_payload(
+        {
+            "postedFrom": "08/01/2026",
+            "postedTo": "08/04/2026",
+            "matches": [
+                {
+                    "noticeId": "abc",
+                    "title": "Security Support",
+                    "workflowStatus": "pursue",
+                    "workflowPriority": "normal",
+                    "workflowOwner": "Lead",
+                    "workflowNextAction": "",
+                    "score": 8,
+                    "responseDeadline": "2026-08-20T17:00:00Z",
+                    "staleEvidenceWarnings": {"count": 1, "items": [{"evidenceId": 4, "reason": "Citation predates revision"}]},
+                    "evidenceCitations": [
+                        {"id": 4, "noticeId": "abc", "verificationState": "needs-review"},
+                        {"id": 5, "noticeId": "abc", "verificationState": "needs-review"},
+                    ],
+                    "complianceRequirements": [{"id": 7, "noticeId": "abc", "status": "open", "verificationState": "needs-review"}],
+                    "proposal": {"id": 1, "stage": "requirements", "stageLabel": "Requirements", "stages": stage_items},
+                }
+            ],
+            "errors": [],
+        },
+        profile,
+        settings,
+        unseen=[],
+    )
+    script = _extract_report_script(build_html_report(report))
+    helpers = "\n".join(
+        [
+            _extract_one_line_js_function(script, "escapeHtml"),
+            _extract_one_line_js_function(script, "icon"),
+            _extract_one_line_js_function(script, "iconLabel"),
+            _extract_one_line_js_function(script, "safeClassToken"),
+            _extract_one_line_js_function(script, "commandActionHtml"),
+            _extract_one_line_js_function(script, "commandCenterHtml"),
+            _extract_one_line_js_function(script, "routeCommandTarget"),
+            _extract_one_line_js_function(script, "writeCommandJson"),
+            _extract_one_line_js_function(script, "commandKindsForQuickAction"),
+            _extract_one_line_js_function(script, "rebuildCommandCenter"),
+            _extract_one_line_js_function(script, "syncCommandCenterAfterAction"),
+            _extract_one_line_js_function(script, "setCommandStatus"),
+            _extract_one_line_js_function(script, "proposalAdjacentStage"),
+            _extract_one_line_js_function(script, "runCommandQuickAction"),
+            _extract_one_line_js_function(script, "renderCommandCenter"),
+        ]
+    )
+    js = textwrap.dedent(
+        f"""
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        const report = {json.dumps(report)};
+        const byId = new Map(report.matches.map(o => [String(o.noticeId), o]));
+        const tokenPanel = {{classList: {{add() {{}}}}}};
+        function token() {{ return 'secret'; }}
+        let opened = [];
+        function openDetail(id, origin) {{ opened.push(['detail', id, origin]); }}
+        function renderProposalWorkspace(id) {{ opened.push(['proposal', id]); }}
+        function renderProposals() {{ opened.push(['proposals']); }}
+        function repaintAmendmentPanel() {{ opened.push(['amendments']); }}
+        function repaintCompliance() {{ opened.push(['compliance']); }}
+        function syncAmendments(id, amendments) {{ byId.get(id).amendmentSummary = amendments.summary; }}
+        function syncCompliance(id, requirements) {{ byId.get(id).complianceRequirements = requirements; }}
+        let requests = [];
+        global.fetch = async (url, options) => {{
+          const body = JSON.parse(options.body);
+          requests.push([url, body, options.headers['X-SAM-RADAR-TOKEN']]);
+          return {{ok:true, headers:{{get(){{ return 'application/json'; }}}}, json: async () => {{
+            if (url === '/api/evidence/verify') return {{ok:true, evidence:{{id:body.evidenceId, noticeId:body.noticeId, verificationState:'verified'}}, items:[{{id:5, noticeId:'abc', verificationState:'needs-review'}},{{id:4, noticeId:'abc', verificationState:'verified'}}]}};
+            if (url === '/api/proposals/stage') return {{ok:true, proposal:{{id:1, stage:body.stage, stageLabel:body.stage === 'gaps' ? 'Gaps' : body.stage, stages:{json.dumps(stage_items)}}}}};
+            if (url.startsWith('/api/status/')) return {{ok:true, workflow:{{status:body.status, priority:body.priority, owner:body.owner, nextAction:body.nextAction, followUpAt:body.followUpAt, notes:body.notes, decisionReason:body.decisionReason, noBidReason:body.noBidReason, noBidDetail:body.noBidDetail, documents:body.documents}}}};
+            return {{ok:false, error:'unexpected'}};
+          }}}};
+        }};
+        let commandHost = {{innerHTML:'', querySelectorAll() {{ return []; }}}};
+        const document = {{
+          getElementById(id) {{ return id === 'command-center' ? commandHost : null; }},
+          querySelector(selector) {{ return {{click() {{ opened.push(['view', selector]); }}}}; }},
+          querySelectorAll() {{ return []; }}
+        }};
+        const window = {{confirm() {{ return true; }}}};
+        const CSS = {{escape(value) {{ return String(value); }}}};
+        const localStorage = {{getItem() {{ return ''; }}}};
+        function setStatusState(el,state,message) {{ el.state = state; el.textContent = message; }}
+        async function readJsonResponse(res) {{ return await res.json(); }}
+        function refreshReportInPlace() {{ opened.push(['refresh']); }}
+        function syncCard(id, workflow) {{
+          Object.assign(byId.get(id), {{
+            workflowStatus: workflow.status,
+            workflowPriority: workflow.priority,
+            workflowOwner: workflow.owner,
+            workflowNextAction: workflow.nextAction,
+            workflowFollowUpAt: workflow.followUpAt,
+            workflowNoBidReason: workflow.noBidReason,
+            workflowNoBidDetail: workflow.noBidDetail,
+            workflowDocuments: workflow.documents
+          }});
+        }}
+        {helpers}
+        assert(report.commandCenter.metrics.totalActions === 4, 'precondition has stale, unverified, compliance, and assignment actions');
+
+        await runCommandQuickAction({{action:'verify-evidence', noticeId:'abc'}}, {{textContent:''}});
+        assert(requests[0][0] === '/api/evidence/verify', 'evidence verify endpoint used');
+        assert(requests[0][1].noticeId === 'abc', 'evidence verify is notice scoped');
+        assert(byId.get('abc').evidenceCitations.length === 2, 'partial verification preserves sibling citations');
+        assert(report.commandCenter.doToday.some(item => item.kind === 'stale-evidence'), 'stale warning remains after citation verify');
+        assert(report.commandCenter.doToday.some(item => item.kind === 'evidence-unverified'), 'unverified sibling keeps evidence action');
+        assert(report.commandCenter.doToday.some(item => item.kind === 'compliance-gap'), 'open compliance row remains');
+        assert(report.commandCenter.metrics.totalActions === report.commandCenter.doToday.length, 'metrics repaint from recomputed actions');
+
+        const beforeOpenRequests = requests.length;
+        await runCommandQuickAction({{action:'open-compliance', noticeId:'abc'}}, {{textContent:''}});
+        assert(requests.length === beforeOpenRequests, 'open compliance is navigation only');
+        assert(report.commandCenter.doToday.some(item => item.kind === 'compliance-gap'), 'open compliance does not clear matrix action');
+
+        await runCommandQuickAction({{action:'advance-proposal', noticeId:'abc'}}, {{textContent:''}});
+        const stageRequest = requests.find(item => item[0] === '/api/proposals/stage');
+        assert(stageRequest[1].stage === 'gaps', 'advance stage uses next ordered current stage');
+        byId.get('abc').proposal = {{id:1, stage:'review', stageLabel:'Review', stages:{json.dumps(stage_items[:-1] + [{"key": "review", "label": "Review", "state": "current"}])}}};
+        const beforeTerminalStage = requests.length;
+        const terminalMessage = await runCommandQuickAction({{action:'advance-proposal', noticeId:'abc'}}, {{textContent:''}});
+        assert(requests.length === beforeTerminalStage, 'terminal stage does not mutate');
+        assert(terminalMessage === 'Proposal is already at Review', 'terminal stage message is accurate');
+
+        await runCommandQuickAction({{action:'no-bid', noticeId:'abc'}}, {{textContent:''}});
+        const workflowRequest = requests.filter(item => item[0] === '/api/status/abc').at(-1);
+        assert(workflowRequest[1].status === 'no-bid', 'no-bid status saved');
+        assert(workflowRequest[1].noBidReason === '', 'no-bid does not fabricate a deadline-too-short reason');
+        assert(report.commandCenter.doToday.length === 0, 'terminal no-bid clears all actions via recompute');
+        assert(report.commandCenter.recentIntelligence.length === 0, 'terminal no-bid has no recent intelligence');
+        assert(report.commandCenter.metrics.totalActions === 0, 'terminal no-bid metrics repaint');
+        assert(report.commandCenter.portfolioHealth.riskLevel === 'low', 'health repaint reflects terminal portfolio');
+        """
+    )
+    subprocess.run(["node", "--input-type=module", "-e", js], check=True)
 
 
 def test_report_compliance_success_messages_and_add_button_target_repainted_dom(tmp_path: Path):
@@ -710,8 +1126,10 @@ def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Pa
     assert 'class="tool-group view-group" role="tablist" aria-label="Report views"' in html
     assert 'class="tool-group filter-group"' in html
     assert 'class="tool-group action-group"' in html
+    assert 'data-view="command" role="tab"' in html
+    assert 'id="command-view" class="view active"' in html
     assert 'data-view="executive" role="tab"' in html
-    assert 'id="executive-view" class="view active"' in html
+    assert 'id="executive-view" class="view"' in html
     assert 'id="list-view" class="view active"' not in html
     assert 'width:min(1320px,calc(100vw - 40px))' in html
     assert 'overflow-wrap:anywhere;overflow-x:hidden' in html
