@@ -10,6 +10,7 @@ Define your business profile once. SAM Radar searches SAM.gov, scores opportunit
 - Scores matches against your local business context
 - Filters expired, duplicate, and low-actionability noise
 - Generates a polished HTML report and JSON export
+- Includes a built-in design-system showcase under Resources
 - Normalizes deadlines to your configured timezone
 - Provides a browser refresh button
 - Adds a manual SAM search workspace that does not overwrite generated reports
@@ -122,6 +123,8 @@ server {
 
 The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`. The pipeline includes owner, priority, next action, follow-up date, decision reason, structured no-bid reason, document review links, event history, follow-up queues, pipeline metrics, an interactive board, archive/unarchive controls, manual SAM search, and GovCon resource links.
 
+The generated report now uses centralized design tokens for typography, spacing, surfaces, radii, shadows, status colors, focus states, and responsive density. Open Resources in the report to see the component showcase for buttons, forms, cards, tables, dialogs, badges, and feedback states.
+
 Manual searches call SAM.gov on demand and render temporary results in the browser. They do not rewrite `reports/latest.html`, `reports/latest.json`, or historical report files until you click Track.
 
 External opportunity intake lets you add a contract found outside SAM.gov, or keep working when the SAM.gov API limit has been reached. Add a title plus source URL, source name, agency/customer, or context note; SAM Radar generates a local `manual-*` ID, rebuilds the latest report from cached data, labels the item as manual, and rejects duplicate adds by source URL or generated fingerprint.
@@ -150,6 +153,7 @@ Slack and Telegram are optional. Configure either or both in `.env`. Daily diges
 - `docs/operations.md` covers releases, GHCR image publishing, backup/restore, reverse proxy hardening, and upgrades.
 - `docs/ux-density.md` documents the pipeline cockpit design direction and responsive QA targets.
 - `docs/navigation-controls.md` documents sticky navigation, back-to-top, and board lane visibility controls.
+- `docs/design-system.md` documents report tokens, component primitives, accessibility, and responsive conventions.
 - `deploy/nginx/sam-radar.lan.conf` is an example nginx vhost.
 
 ## Local Development
@@ -171,6 +175,7 @@ sam-radar serve
 - v0.3: board view, bid/no-bid statuses, notes, watchlist, and CSV export
 - v0.4: opportunity pipeline with detail view, follow-up queue, event history, document review tracking, metrics, and optional workflow notifications
 - v0.5: opportunity control center with archive/unarchive, isolated manual search, duplicate guards, and resource links
+- v0.8: professional design system with tokens, reusable primitives, accessible feedback states, responsive density, and a Resources showcase
 - v1.0: stable self-hosted release
 
 ## Security Notes

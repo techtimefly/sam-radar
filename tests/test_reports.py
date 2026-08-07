@@ -1,7 +1,21 @@
+import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 from sam_radar.config import BusinessProfile, Settings
 from sam_radar.reports import build_csv_report, build_html_report, build_report_payload, write_reports
+
+
+def _extract_report_script(html: str) -> str:
+    match = re.search(r"<script>(?P<script>.*)</script></body></html>", html, flags=re.DOTALL)
+    assert match is not None
+    return match.group("script")
+
+
+def _extract_one_line_js_function(script: str, name: str) -> str:
+    start = script.index(f"function {name}(")
+    return script[start : script.index("\n", start)]
 
 
 def test_report_uses_configured_business_name_and_normalized_time(tmp_path: Path):
@@ -29,6 +43,144 @@ def test_report_uses_configured_business_name_and_normalized_time(tmp_path: Path
     assert "ExampleTech" in html
     assert "MDT" in html
     assert "Example Technology Services LLC" not in html
+
+
+def test_report_includes_professional_design_system_primitives_and_showcase(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    payload = {
+        "postedFrom": "08/01/2026",
+        "postedTo": "08/04/2026",
+        "matches": [],
+        "errors": [],
+    }
+    report = build_report_payload(payload, profile, settings, unseen=[])
+    html = build_html_report(report)
+
+    assert "--font-sans:" in html
+    assert "--space-1:4px" in html
+    assert "--radius-card:8px" in html
+    assert "--shadow-card:" in html
+    assert "--surface-page:var(--bg)" in html
+    assert "--status-success:" in html
+    assert "--status-warning:" in html
+    assert "--status-danger:" in html
+    assert "--status-info:" in html
+    assert "--density-card-padding:" in html
+    assert '[data-theme=dark]{color-scheme:dark' in html
+    assert "button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible" in html
+    assert "@media(prefers-reduced-motion:reduce)" in html
+    assert ".btn-primary,.refresh,.token-save,.save-detail,.save-status,.sam" in html
+    assert ".btn-secondary,.small-ghost,.archive-toggle,.manual-add" in html
+    assert ".form-control,input,select,textarea" in html
+    assert ".card,.panel,.opp,.empty,.lane,.modal-card,.resource-card,.manual-card" in html
+    assert ".table-wrap" in html
+    assert ".dialog-confirm" in html
+    assert ".badge,.pill" in html
+    assert ".state-message" in html
+    assert ".state-loading" in html
+    assert ".state-success" in html
+    assert ".state-error" in html
+    assert ".state-empty" in html
+    assert ".confirmable[data-confirming=true]" in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+    assert 'id="component-showcase"' in html
+    assert "Design System Showcase" in html
+    assert "Tokens" in html
+    assert "Buttons" in html
+    assert "Forms" in html
+    assert "Cards" in html
+    assert "Tables" in html
+    assert "Dialogs" in html
+    assert "Feedback States" in html
+    assert "renderComponentShowcase()" in html
+    assert "componentShowcaseHtml()" in html
+    assert "function setStatusState" in html
+
+
+def test_confirmation_and_status_state_helpers_restore_archive_button_on_confirmed_failure(tmp_path: Path):
+    profile = BusinessProfile(name="Example Technology Services LLC", dba="ExampleTech", capabilities=["security"])
+    settings = Settings(sam_gov_api_key="test", reports_dir=tmp_path, timezone="America/Denver")
+    payload = {
+        "postedFrom": "08/01/2026",
+        "postedTo": "08/04/2026",
+        "matches": [
+            {
+                "noticeId": "abc-123",
+                "title": "Security Support",
+                "type": "Sources Sought",
+                "postedDate": "2026-08-04",
+                "responseDeadline": "2026-08-10T09:00:00-04:00",
+                "score": 10,
+                "reasons": ["keywords: security"],
+                "recommendation": "Pursue",
+            }
+        ],
+        "errors": [],
+    }
+    report = build_report_payload(payload, profile, settings, unseen=[])
+    html = build_html_report(report)
+    script = _extract_report_script(html)
+    helpers = "\n".join(
+        [
+            _extract_one_line_js_function(script, "escapeHtml"),
+            _extract_one_line_js_function(script, "icon"),
+            _extract_one_line_js_function(script, "iconLabel"),
+            _extract_one_line_js_function(script, "setStatusState"),
+            _extract_one_line_js_function(script, "requestConfirmation"),
+        ]
+    )
+    js = textwrap.dedent(
+        f"""
+        const timers = [];
+        global.setTimeout = (fn, ms) => {{ timers.push({{ fn, ms }}); return 1; }};
+        class FakeClassList {{
+          constructor(values) {{ this.values = new Set(values); }}
+          contains(value) {{ return this.values.has(value); }}
+        }}
+        function assert(condition, message) {{ if (!condition) throw new Error(message); }}
+        {helpers}
+
+        const archiveButton = {{
+          classList: new FakeClassList(['archive-toggle', 'confirmable']),
+          dataset: {{}},
+          innerHTML: '<svg></svg> Archive'
+        }};
+        assert(requestConfirmation(archiveButton, 'Confirm archive') === false, 'first archive click waits');
+        assert(archiveButton.dataset.confirming === 'true', 'confirmation flag is set');
+        assert(archiveButton.innerHTML.includes('Confirm archive'), 'confirmation label is shown');
+        assert(requestConfirmation(archiveButton, 'Confirm archive') === true, 'second archive click proceeds');
+        assert(archiveButton.dataset.confirming === 'false', 'confirmation flag is cleared before save');
+        assert(archiveButton.innerHTML === '<svg></svg> Archive', 'original archive label is restored before save failure');
+        timers[0].fn();
+        assert(archiveButton.innerHTML === '<svg></svg> Archive', 'timeout does not reapply confirmation label');
+
+        const unarchiveButton = {{
+          classList: new FakeClassList(['archive-toggle']),
+          dataset: {{}},
+          innerHTML: '<svg></svg> Unarchive'
+        }};
+        assert(requestConfirmation(unarchiveButton, 'Confirm archive') === true, 'unarchive stays immediate');
+        assert(unarchiveButton.innerHTML === '<svg></svg> Unarchive', 'unarchive label is untouched');
+
+        const message = {{
+          dataset: {{}},
+          className: 'workflow-message muted',
+          attributes: {{}},
+          setAttribute(name, value) {{ this.attributes[name] = value; }}
+        }};
+        setStatusState(message, 'loading', 'Archiving...');
+        assert(message.className === 'workflow-message muted state-message state-loading', 'loading class preserves base classes');
+        assert(message.attributes.role === 'status', 'status role is set');
+        assert(message.attributes['aria-live'] === 'polite', 'status updates are polite');
+        assert(message.textContent === 'Archiving...', 'loading message is set');
+        setStatusState(message, 'error', 'Token required');
+        assert(message.className === 'workflow-message muted state-message state-error', 'error state replaces loading state');
+        assert(message.textContent === 'Token required', 'error message is set');
+        """
+    )
+    subprocess.run(["node", "-e", js], check=True)
 
 
 def test_report_renders_workflow_controls_and_safe_status_api_hooks(tmp_path: Path):
