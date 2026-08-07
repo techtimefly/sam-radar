@@ -126,6 +126,74 @@ def test_refresh_report_includes_manual_tracked_opportunities(tmp_path: Path, mo
     assert "manual-report-1" in latest
 
 
+def test_add_external_manual_opportunity_rebuilds_cached_report_without_sam(tmp_path: Path, monkeypatch):
+    profile = tmp_path / "business.yaml"
+    reports = tmp_path / "reports"
+    data_dir = tmp_path / "data"
+    write_profile(profile)
+    reports.mkdir()
+    (reports / "latest.json").write_text(
+        """
+{
+  "summary": {"postedFrom": "08/01/2099", "postedTo": "08/07/2099"},
+  "matches": [
+    {
+      "noticeId": "sam-1",
+      "title": "Cached SAM Opportunity",
+      "organization": "Example Agency",
+      "type": "Solicitation",
+      "score": 8,
+      "recommendation": "Monitor"
+    }
+  ]
+}
+""".lstrip()
+    )
+    settings = Settings(
+        sam_gov_api_key="rate-limited",
+        profile_path=profile,
+        reports_dir=reports,
+        data_dir=data_dir,
+        enable_descriptions=False,
+    )
+
+    def fail_search(*args, **kwargs):
+        raise AssertionError("SAM.gov should not be called for external manual intake")
+
+    monkeypatch.setattr("sam_radar.core.search_opportunities", fail_search)
+    result = add_manual_opportunity(
+        settings,
+        {
+            "title": "External CMMC Support Lead",
+            "organization": "Prime Integrator",
+            "sourceName": "Prime contractor",
+            "sourceUrl": "prime.example/contracts/cmmc",
+            "responseDeadline": "2099-08-30T16:00",
+            "naicsCode": "541512",
+            "classificationCode": "DJ01",
+            "estimatedValue": "$125,000",
+            "owner": "Capture Lead",
+            "notes": "Found outside SAM.gov while the API limit was reached.",
+            "score": 7,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["cached"] is True
+    assert result["opportunity"]["noticeId"].startswith("manual-")
+    latest = (reports / "latest.json").read_text()
+    assert "Cached SAM Opportunity" in latest
+    assert "External CMMC Support Lead" in latest
+    assert '"manualExternal": true' in latest
+    assert '"workflowOwner": "Capture Lead"' in latest
+    csv_text = (reports / "latest.csv").read_text()
+    assert "source,source_name,estimated_value" in csv_text
+    assert "manual,Prime contractor,\"$125,000\"" in csv_text
+
+    duplicate = add_manual_opportunity(settings, {"title": "Different Title", "sourceUrl": "https://prime.example/contracts/cmmc"})
+    assert duplicate == {"ok": False, "duplicate": True, "error": "Already tracked"}
+
+
 def test_refresh_report_uses_active_saved_search_profiles(tmp_path: Path, monkeypatch):
     profile = tmp_path / "business.yaml"
     reports = tmp_path / "reports"

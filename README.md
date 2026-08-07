@@ -122,7 +122,11 @@ server {
 
 The dashboard can save lightweight pursuit workflow state per opportunity: `new`, `reviewing`, `pursue`, `teaming`, `monitor`, `no-bid`, `submitted`, and `archived`. The pipeline includes owner, priority, next action, follow-up date, decision reason, structured no-bid reason, document review links, event history, follow-up queues, pipeline metrics, an interactive board, archive/unarchive controls, manual SAM search, and GovCon resource links.
 
-Manual searches call SAM.gov on demand and render temporary results in the browser. They do not rewrite `reports/latest.html`, `reports/latest.json`, or historical report files. Clicking Track requires `APP_WRITE_TOKEN`; SAM Radar rejects manual adds when the notice already appears in the current report, seen history, saved workflow, or manual tracking table.
+Manual searches call SAM.gov on demand and render temporary results in the browser. They do not rewrite `reports/latest.html`, `reports/latest.json`, or historical report files until you click Track.
+
+External opportunity intake lets you add a contract found outside SAM.gov, or keep working when the SAM.gov API limit has been reached. Add a title plus source URL, source name, agency/customer, or context note; SAM Radar generates a local `manual-*` ID, rebuilds the latest report from cached data, labels the item as manual, and rejects duplicate adds by source URL or generated fingerprint.
+
+Clicking Track or Add Opportunity requires `APP_WRITE_TOKEN`; SAM Radar rejects manual adds when the notice already appears in the current report, seen history, saved workflow, or manual tracking table.
 
 Status and notes writes require `APP_WRITE_TOKEN`. Generate one with `sam-radar generate-token` or `scripts/generate-token.sh`, save it in `.env`, then use the dashboard Unlock control to store it in your browser. This is separate from your SAM.gov API key. Leave `APP_WRITE_TOKEN` blank to disable browser writes.
 
